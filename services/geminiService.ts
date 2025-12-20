@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { Player, Team } from '../types';
 
@@ -72,3 +73,23 @@ export const generateUnsoldCommentary = async (player: Player): Promise<string> 
       return "Crickets... literally. No bids.";
     }
   };
+
+export const getPlayerInsights = async (player: Player): Promise<string> => {
+  const client = getClient();
+  if (!client) return "AI insights unavailable.";
+
+  try {
+    const prompt = `
+      Provide a concise summary (max 30 words) of the recent T20 form and key achievements for cricket player: ${player.name} (${player.country}).
+      Focus on recent IPL performance or T20 Internationals. Be data-driven but brief.
+    `;
+    const response = await client.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+    });
+    return response.text || "Data unavailable.";
+  } catch (error) {
+    console.error("Error fetching insights:", error);
+    return "Could not fetch insights.";
+  }
+};

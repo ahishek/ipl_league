@@ -1,0 +1,5 @@
+{
+  "name": "IPL Mock Auctioneer",
+  "description": "A comprehensive mock auction platform for cricket leagues featuring team management, real-time bidding timers, pot-based player selection, and AI-powered commentary.",
+  "requestFramePermissions": []
+}

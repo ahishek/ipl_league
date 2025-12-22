@@ -5,7 +5,7 @@ export const INITIAL_CONFIG: AuctionConfig = {
   totalBudget: 1500,
   maxPlayers: 15,
   bidTimerSeconds: 30,
-  minBidIncrement: 20, // 20 Lakhs/Units standard increment
+  minBidIncrement: 10, // 20 Lakhs/Units standard increment
 };
 
 export const TEAM_COLORS = [

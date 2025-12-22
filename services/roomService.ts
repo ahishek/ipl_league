@@ -10,7 +10,7 @@ const USER_KEY = 'ipl_user_profile';
 const generateCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 
 const shuffleByPot = (players: Player[]): Player[] => {
-    const potOrder: Pot[] = ['A', 'B', 'C', 'D', 'Uncategorized'];
+    const potOrder: Pot[] = ['A', 'B', 'C', 'Uncategorized'];
     const groups: Record<string, Player[]> = {};
     potOrder.forEach(p => groups[p] = []);
     players.forEach(p => {
@@ -25,6 +25,17 @@ const shuffleByPot = (players: Player[]): Player[] => {
         }
         return arr;
     });
+};
+
+const PEER_CONFIG = {
+    debug: 1,
+    config: {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+        ]
+    }
 };
 
 class RoomService {
@@ -89,7 +100,7 @@ class RoomService {
 
         return new Promise((resolve, reject) => {
             if (this.peer) this.peer.destroy();
-            this.peer = new Peer(`${APP_PREFIX}${roomId}`, { debug: 1 });
+            this.peer = new Peer(`${APP_PREFIX}${roomId}`, PEER_CONFIG);
             this.peer.on('open', () => resolve({ room: this.currentRoom!, user: this.currentUser! }));
             this.peer.on('connection', (conn) => this.handleConnection(conn));
             this.peer.on('error', reject);
@@ -104,7 +115,14 @@ class RoomService {
 
         return new Promise((resolve, reject) => {
             if (this.peer) this.peer.destroy();
-            this.peer = new Peer(); 
+            this.peer = new Peer(PEER_CONFIG); 
+            
+            // Handle peer errors (like peer-unavailable)
+            this.peer.on('error', (err) => {
+                console.error("Peer error:", err);
+                reject(err);
+            });
+
             this.peer.on('open', () => {
                 const conn = this.peer!.connect(`${APP_PREFIX}${roomId}`);
                 conn.on('open', () => {
@@ -122,7 +140,11 @@ class RoomService {
                         }
                     });
                 });
-                conn.on('error', reject);
+                conn.on('error', (err) => {
+                    console.error("Connection error:", err);
+                    reject(err);
+                });
+                // Connection might hang if peer ID is valid but blocked, so we keep the timeout
                 setTimeout(() => reject(new Error("Join Timeout")), 10000);
             });
         });
@@ -156,6 +178,9 @@ class RoomService {
                 break;
             case 'ADD_TEAM':
                 room.teams.push(action.payload);
+                break;
+            case 'UPDATE_TEAM':
+                room.teams = room.teams.map(t => t.id === action.payload.teamId ? { ...t, ...action.payload.updates } : t);
                 break;
             case 'UPDATE_CONFIG':
                 room.config = { ...room.config, ...action.payload };
@@ -241,6 +266,9 @@ class RoomService {
             case 'TOGGLE_PAUSE':
                 room.gameState.isPaused = !room.gameState.isPaused;
                 break;
+            case 'ADD_LOG':
+                logs.unshift({ id: Date.now().toString(), message: action.payload.message, type: action.payload.type, timestamp: new Date() });
+                break;
         }
 
         room.gameState.logs = logs.slice(0, 50);
@@ -275,7 +303,9 @@ class RoomService {
     subscribe(callback: (room: Room) => void) {
         this.stateSubscribers.push(callback);
         if (this.currentRoom) callback(this.currentRoom);
-        return () => this.stateSubscribers = this.stateSubscribers.filter(cb => cb !== callback);
+        return () => {
+            this.stateSubscribers = this.stateSubscribers.filter(cb => cb !== callback);
+        };
     }
 }
 

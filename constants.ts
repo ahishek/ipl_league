@@ -1,3 +1,4 @@
+
 import { Player, Team, AuctionConfig } from './types';
 
 export const INITIAL_CONFIG: AuctionConfig = {
@@ -8,16 +9,16 @@ export const INITIAL_CONFIG: AuctionConfig = {
 };
 
 export const TEAM_COLORS = [
-  'bg-blue-600',
-  'bg-yellow-500',
-  'bg-red-600',
-  'bg-purple-600',
-  'bg-pink-600',
-  'bg-orange-500',
-  'bg-teal-600',
-  'bg-indigo-600',
-  'bg-cyan-600',
-  'bg-rose-600'
+  '#2563eb', // blue-600
+  '#eab308', // yellow-500
+  '#dc2626', // red-600
+  '#9333ea', // purple-600
+  '#db2777', // pink-600
+  '#f97316', // orange-500
+  '#0d9488', // teal-600
+  '#4f46e5', // indigo-600
+  '#0891b2', // cyan-600
+  '#e11d48'  // rose-600
 ];
 
 export const MOCK_PLAYERS: Player[] = [
@@ -73,11 +74,11 @@ export const MOCK_PLAYERS: Player[] = [
 ];
 
 export const INITIAL_TEAMS: Team[] = [
-  { id: 't1', name: 'Royal Challengers', ownerName: 'United Spirits', budget: 1500, roster: [], color: 'bg-red-600' },
-  { id: 't2', name: 'Chennai Kings', ownerName: 'India Cements', budget: 1500, roster: [], color: 'bg-yellow-500' },
-  { id: 't3', name: 'Mumbai Indians', ownerName: 'Reliance', budget: 1500, roster: [], color: 'bg-blue-600' },
-  { id: 't4', name: 'Kolkata Riders', ownerName: 'Red Chillies', budget: 1500, roster: [], color: 'bg-purple-600' },
-  { id: 't5', name: 'Sunrisers', ownerName: 'Sun Group', budget: 1500, roster: [], color: 'bg-orange-500' },
-  { id: 't6', name: 'Rajasthan Royals', ownerName: 'Manoj Badale', budget: 1500, roster: [], color: 'bg-pink-600' },
-  { id: 't7', name: 'Lucknow Giants', ownerName: 'RPSG Group', budget: 1500, roster: [], color: 'bg-teal-600' },
+  { id: 't1', name: 'Royal Challengers', ownerName: 'United Spirits', budget: 1500, roster: [], color: '#dc2626' },
+  { id: 't2', name: 'Chennai Kings', ownerName: 'India Cements', budget: 1500, roster: [], color: '#eab308' },
+  { id: 't3', name: 'Mumbai Indians', ownerName: 'Reliance', budget: 1500, roster: [], color: '#2563eb' },
+  { id: 't4', name: 'Kolkata Riders', ownerName: 'Red Chillies', budget: 1500, roster: [], color: '#9333ea' },
+  { id: 't5', name: 'Sunrisers', ownerName: 'Sun Group', budget: 1500, roster: [], color: '#f97316' },
+  { id: 't6', name: 'Rajasthan Royals', ownerName: 'Manoj Badale', budget: 1500, roster: [], color: '#db2777' },
+  { id: 't7', name: 'Lucknow Giants', ownerName: 'RPSG Group', budget: 1500, roster: [], color: '#0d9488' },
 ];

@@ -2,92 +2,143 @@
 import { GoogleGenAI } from "@google/genai";
 import { Player, Team } from '../types';
 
-let aiClient: GoogleGenAI | null = null;
+/**
+ * Generates a team logo using Gemini 2.5 Flash Image.
+ * Compliant with Google GenAI SDK guidelines.
+ */
+export const generateTeamLogo = async (teamName: string, colorHex: string): Promise<string> => {
+  // Create a new instance right before use to ensure the most up-to-date API key is used
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const getClient = () => {
-  if (!aiClient && process.env.API_KEY) {
-    aiClient = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  try {
+    const prompt = `A professional, iconic sports franchise logo for a team named "${teamName}". 
+    The logo should feature a powerful and modern mascot or symbol (e.g., a predator, a warrior, or a dynamic abstract shape) that represents the team's name. 
+    Use a professional color palette emphasizing the color ${colorHex}. 
+    Style: Minimalist vector, flat design, sharp clean lines, high contrast, suitable for professional sports leagues like IPL, NBA, or MLS. 
+    Centered on a solid black background. No text inside the logo, focus purely on the icon/mascot.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: { parts: [{ text: prompt }] },
+    });
+
+    if (!response.candidates?.[0]?.content?.parts) return "";
+
+    // Iterate through all parts to find the image part as per guidelines
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+      }
+    }
+    return "";
+  } catch (error) {
+    console.error("Error generating team logo:", error);
+    return "";
   }
-  return aiClient;
 };
 
+/**
+ * Generates dramatic auction commentary for a sold player using Gemini 3 Flash.
+ */
 export const generateAuctionCommentary = async (
   player: Player,
   team: Team,
   soldPrice: number,
   teamsState: Team[]
 ): Promise<string> => {
-  const client = getClient();
-  if (!client) return "Gemini API Key not found. Commentary unavailable.";
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {
+    const isSteal = soldPrice <= player.basePrice * 1.2;
+    const isExpensive = soldPrice >= player.basePrice * 4;
+    const isMadness = soldPrice >= player.basePrice * 8;
+
     const prompt = `
-      You are a hilarious, sarcastic, and high-energy cricket auction commentator (like a mix of Danny Morrison and a stand-up comic).
+      You are a legendary cricket auction commentator. You must react to a successful sale with high drama, wit, and personality.
+      Channel these icons:
+      - Richie Benaud (Dry, sophisticated, "Marvelous effort!")
+      - Ravi Shastri (Booming energy, "Like a tracer bullet!", "Big Boy!", "Absolute scenes!")
+      - Harsha Bhogle (Poetic, strategic, storytelling)
+      - Kerry O'Keeffe (Eccentric humor, witty jabs, quirky metaphors)
       
-      Event:
-      Player: ${player.name} (${player.position})
-      Sold To: ${team.name} for ${soldPrice} Lakhs.
-      Base Price was: ${player.basePrice}.
+      Event Details:
+      - Player: ${player.name} (${player.position})
+      - Sold To Team: ${team.name} (Owner: ${team.ownerName})
+      - Hammer Price: ${soldPrice} Lakhs (Base: ${player.basePrice})
+      - Market Context: ${isSteal ? 'A absolute bargain/steal.' : isMadness ? 'Financial madness/massive overpay.' : isExpensive ? 'A huge investment.' : 'Fair market value.'}
+      - Team Purse Status: ${team.budget} Lakhs remaining.
+
+      Your Persona Instructions:
+      1. Choose ONE of the personas above (or a blend).
+      2. If it was a 'Steal', praise ${team.ownerName}'s strategic genius and timing.
+      3. If it was 'Madness', take a witty, sharp jab at ${team.ownerName} for breaking the bank and potentially ruining their remaining auction.
+      4. Add high-octane sports drama ("The room is in shock!", "A masterstroke that leaves the competition reeling!").
+      5. Keep it to ONE punchy, creative sentence (max 25 words).
       
-      Task:
-      Write a ONE sentence reaction (max 15 words).
-      - Be funny, sarcastic, or use cricket slang.
-      - If the price is high, mock the team's spending.
-      - If low, call it a robbery.
-      - Make it sound like a tweet.
+      Example: "Shastri: Absolute scenes! ${team.ownerName} has gone for the jugular and emptied the vault for this big boy!"
+      Example: "O'Keeffe: ${team.ownerName} just got him for peanuts! The other owners must be hibernating in the back room!"
     `;
 
-    const response = await client.models.generateContent({
+    const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
 
-    return response.text || "Cha-ching! Money flows like water!";
+    // Access the .text property directly (not a method call) as per SDK rules
+    return response.text?.trim() || "Sold! A massive addition to the roster!";
   } catch (error) {
     console.error("Error generating commentary:", error);
-    return "Sold! The hammer has spoken!";
+    return "The hammer falls! A significant acquisition for the franchise.";
   }
 };
 
+/**
+ * Generates commentary for an unsold player using Gemini 3 Flash.
+ */
 export const generateUnsoldCommentary = async (player: Player): Promise<string> => {
-    const client = getClient();
-    if (!client) return "";
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
     try {
       const prompt = `
-        You are a savage cricket commentator.
-        Player ${player.name} just went UNSOLD.
+        You are a cricket commentator. A player just went UNSOLD. Channel Richie Benaud or Kerry O'Keeffe.
+        Player: ${player.name} (${player.position})
         
         Task:
-        Give a savage, funny, or sad 1-sentence roast (max 15 words) about nobody wanting them. 
-        Maybe mention they should stick to Instagram reels or test cricket.
+        Provide a 1-sentence witty or slightly tragic observation (max 15 words).
+        - If the player is a star, act shocked.
+        - If they are unknown, be dry.
+        - Use "Marvelous" or a quirky Kerry O'Keeffe metaphor like "Nobody wants the last biscuit on the plate!"
       `;
   
-      const response = await client.models.generateContent({
+      const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
       });
   
-      return response.text || "Cricket? Maybe try Ludo instead.";
+      return response.text?.trim() || "Silence in the auditorium. The hammer falls on a lonely note.";
     } catch (error) {
-      return "Crickets... literally. No bids.";
+      console.error("Error generating unsold commentary:", error);
+      return "No takers. The auction moves on.";
     }
   };
 
+/**
+ * Provides analytical insights for a player using Gemini 3 Flash.
+ */
 export const getPlayerInsights = async (player: Player): Promise<string> => {
-  const client = getClient();
-  if (!client) return "AI insights unavailable.";
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {
     const prompt = `
-      Provide a concise summary (max 30 words) of the recent T20 form and key achievements for cricket player: ${player.name} (${player.country}).
-      Focus on recent IPL performance or T20 Internationals. Be data-driven but brief.
+      Provide a concise, high-impact summary (max 30 words) of ${player.name}'s recent T20 form.
+      Include one "Key Stat" that justifies their auction value. Be direct, analytical, and professional.
     `;
-    const response = await client.models.generateContent({
+    const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
-    return response.text || "Data unavailable.";
+    // Access response.text directly (property access)
+    return response.text?.trim() || "Data unavailable.";
   } catch (error) {
     console.error("Error fetching insights:", error);
     return "Could not fetch insights.";

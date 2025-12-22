@@ -1,16 +1,75 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Play, Pause, SkipForward, Settings, Gavel, Users, Activity, Trophy, User, Plus, Trash2,
-  FileSpreadsheet, CheckCircle, XCircle, Download, Link as LinkIcon, 
-  Copy, LogOut, Crown, ArrowRight, Share2, RefreshCw, Loader2, AlertCircle, Eye, StopCircle, Clock, DollarSign, Search, Sparkles
+  CheckCircle, XCircle, Download, Copy, LogOut, Crown, ArrowRight, Share2, RefreshCw, 
+  Loader2, AlertCircle, Clock, DollarSign, Search, Sparkles, List, Bell, Star, Palette, 
+  FileText, Save, Calendar, Image as ImageIcon, Zap, History, ChevronRight, Briefcase, Filter, StopCircle,
+  UserCheck, UserMinus, TrendingUp
 } from 'lucide-react';
-import { Player, Team, Room, UserState, AuctionConfig, Pot, PlayerStatus } from './types';
+import { Player, Team, Room, UserState, AuctionConfig, Pot, PlayerStatus, Position, UserProfile, AuctionArchive } from './types';
 import { TEAM_COLORS } from './constants';
-import { generateAuctionCommentary, generateUnsoldCommentary, getPlayerInsights } from './services/geminiService';
+import { generateAuctionCommentary, generateUnsoldCommentary, getPlayerInsights, generateTeamLogo } from './services/geminiService';
 import { roomService } from './services/roomService';
 
-// --- Rendering Helpers (Moved Outside Component) ---
+// --- Helper Functions ---
+
+const parseCSVData = (text: string) => {
+  try {
+    const rows = text.trim().split(/\r?\n/);
+    const headers = rows[0].toLowerCase().split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(h => h.trim().replace(/^"|"$/g, ''));
+    const nameIdx = headers.findIndex(h => h.includes('name'));
+    const roleIdx = headers.findIndex(h => h.includes('role') || h.includes('position'));
+    const potIdx = headers.findIndex(h => h.includes('pot') || h.includes('category') || h.includes('group'));
+    const imgIdx = headers.findIndex(h => h.includes('image') || h.includes('url') || h.includes('photo'));
+    const teamIdx = headers.findIndex(h => h.includes('team') || h.includes('ipl'));
+    const priceIdx = headers.findIndex(h => h.includes('price') || h.includes('base') || h.includes('value'));
+
+    const newPlayers: Player[] = [];
+    const startIndex = (nameIdx !== -1) ? 1 : 0;
+    for(let i=startIndex; i<rows.length; i++) {
+       let cols = rows[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.trim().replace(/^"|"$/g, ''));
+       if (cols.length < 3) continue;
+       const name = nameIdx !== -1 ? cols[nameIdx] : cols[0];
+       const roleRaw = roleIdx !== -1 ? cols[roleIdx] : cols[1];
+       const potRaw = potIdx !== -1 ? cols[potIdx] : cols[2];
+       const imageUrl = imgIdx !== -1 ? cols[imgIdx] : cols[3];
+       const iplTeam = teamIdx !== -1 ? cols[teamIdx] : cols[4];
+       const basePriceStr = priceIdx !== -1 ? cols[priceIdx] : cols[5];
+
+       let position: Position = 'Batter';
+       if (roleRaw?.toUpperCase().includes('WK')) position = 'Wicket Keeper';
+       else if (roleRaw?.toUpperCase().includes('AR') || roleRaw?.toUpperCase().includes('ALL')) position = 'All Rounder';
+       else if (roleRaw?.toUpperCase().includes('BOWL')) position = 'Bowler';
+
+       let basePrice = 20;
+       if (basePriceStr) {
+           const cleaned = basePriceStr.replace(/[^0-9.]/g, '');
+           const val = parseFloat(cleaned);
+           if (!isNaN(val)) {
+               if (basePriceStr.toLowerCase().includes('cr')) basePrice = val * 100;
+               else basePrice = val;
+           }
+       }
+
+       newPlayers.push({
+          id: `sheet-${Date.now()}-${i}`,
+          name: name || 'Unknown Player', 
+          position, 
+          pot: (potRaw as Pot) || 'Uncategorized', 
+          imageUrl, 
+          iplTeam,
+          basePrice: Math.round(basePrice),
+          status: 'PENDING', 
+          country: 'TBD'
+       });
+    }
+    return newPlayers;
+  } catch (e) { 
+      console.error("Parse Error:", e);
+      return []; 
+  }
+};
 
 interface BackgroundWrapperProps {
   children: React.ReactNode;
@@ -18,220 +77,297 @@ interface BackgroundWrapperProps {
 
 const BackgroundWrapper: React.FC<BackgroundWrapperProps> = ({ children }) => (
     <div className="min-h-screen bg-[#050505] text-white selection:bg-yellow-500/30 overflow-x-hidden relative font-sans">
-        {/* Global Ambient Gradients */}
         <div className="fixed top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
         <div className="fixed bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
-        <div className="relative z-10 w-full h-full">
-          {children}
-        </div>
+        <div className="relative z-10 w-full h-full">{children}</div>
     </div>
 );
 
-interface GlassCardProps {
-  children?: React.ReactNode;
-  className?: string;
-  onClick?: React.MouseEventHandler<HTMLDivElement>;
-}
-
-const GlassCard: React.FC<GlassCardProps> = ({ children, className = "", onClick }) => (
-    <div onClick={onClick} className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl shadow-xl transition-all duration-300 ${className}`}>
-        {children}
-    </div>
+const GlassCard: React.FC<{children?: React.ReactNode; className?: string; onClick?: React.MouseEventHandler<HTMLDivElement>}> = ({ children, className = "", onClick }) => (
+    <div onClick={onClick} className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl shadow-xl transition-all duration-300 ${className}`}>{children}</div>
 );
 
 export default function App() {
   // --- View State ---
-  const [view, setView] = useState<'HOME' | 'LOBBY' | 'GAME' | 'COMPLETED'>('HOME');
+  const [view, setView] = useState<'LOGIN' | 'HOME' | 'LOBBY' | 'GAME' | 'COMPLETED' | 'ARCHIVE_DETAIL'>('LOGIN');
+  const viewRef = useRef(view);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   
-  // --- Room & User State ---
+  // --- User & Profile ---
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loginName, setLoginName] = useState("");
   const [currentUser, setCurrentUser] = useState<UserState | null>(null);
   const [room, setRoom] = useState<Room | null>(null);
-  
+  const [archive, setArchive] = useState<AuctionArchive[]>([]);
+  const [selectedArchive, setSelectedArchive] = useState<AuctionArchive | null>(null);
+
   // --- Local Inputs ---
   const [hostRoomName, setHostRoomName] = useState("");
   const [joinRoomCode, setJoinRoomCode] = useState("");
-  
   const [newTeamName, setNewTeamName] = useState("");
-  const [newTeamOwner, setNewTeamOwner] = useState("");
+  const [newTeamColor, setNewTeamColor] = useState(TEAM_COLORS[0]);
+  const [logoOptions, setLogoOptions] = useState<string[]>([]);
+  const [selectedLogoUrl, setSelectedLogoUrl] = useState<string | null>(null);
+  const [isGeneratingLogos, setIsGeneratingLogos] = useState(false);
   
-  const [isInviteFlow, setIsInviteFlow] = useState(false);
-  
-  // --- Modals State ---
+  // --- Modals & Game State ---
   const [showSettings, setShowSettings] = useState(false);
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'config' | 'teams' | 'import'>('config');
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [showEndConfirmation, setShowEndConfirmation] = useState(false);
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'config' | 'schedule' | 'teams' | 'import'>('config');
+  const [playerInsights, setPlayerInsights] = useState("");
+  const [isInsightsLoading, setIsInsightsLoading] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<'LOGS' | 'WATCHLIST'>('LOGS');
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [lobbyView, setLobbyView] = useState<'TEAMS' | 'PLAYERS'>('TEAMS');
+  const [lobbySearch, setLobbySearch] = useState("");
+  const [lobbyFilterPot, setLobbyFilterPot] = useState<Pot | 'ALL'>('ALL');
+  const [lobbyFilterRole, setLobbyFilterRole] = useState<Position | 'ALL'>('ALL');
+  const [privateNotes, setPrivateNotes] = useState<Record<string, string>>({});
+  const [editingNotePlayerId, setEditingNotePlayerId] = useState<string | null>(null);
+  const [tempNoteValue, setTempNoteValue] = useState("");
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
 
-  // --- Import State ---
+  // --- Import Specific State ---
   const [sheetUrl, setSheetUrl] = useState("");
-  const [sheetName, setSheetName] = useState("Copy of All Players Data");
+  const [sheetName, setSheetName] = useState("Sheet1");
   const [isFetchingSheet, setIsFetchingSheet] = useState(false);
   const [fetchedPreview, setFetchedPreview] = useState<Player[]>([]);
 
-  // --- Game Interactions ---
-  const [playerInsights, setPlayerInsights] = useState("");
-  const [isInsightsLoading, setIsInsightsLoading] = useState(false);
-  const [isProcessingAction, setIsProcessingAction] = useState(false);
-
   const isHost = currentUser?.isAdmin || false;
-  const myTeam = room?.teams.find(t => t.controlledByUserId === currentUser?.id);
-  
-  // Safe URL generation
-  const shareUrl = (typeof window !== 'undefined' && room?.id) 
-    ? `${window.location.origin}${window.location.pathname}?room=${room.id}` 
-    : '';
+  const myTeam = room?.teams.find(t => t.controlledByUserId === profile?.id);
 
-  // --- Init ---
+  // Computed Stats
+  const highestBidPlayer = useMemo(() => {
+    if (!room) return null;
+    return [...room.players]
+      .filter(p => p.status === 'SOLD' && p.soldPrice)
+      .sort((a, b) => (b.soldPrice || 0) - (a.soldPrice || 0))[0];
+  }, [room?.players]);
+
+  const soldCount = useMemo(() => {
+    return room?.players.filter(p => p.status === 'SOLD').length || 0;
+  }, [room?.players]);
+
+  // Sync ref for state subscribers
+  useEffect(() => { viewRef.current = view; }, [view]);
+
+  // --- Watchlist Alert Logic ---
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('room');
-    if (code && code !== 'undefined' && code !== 'null') {
-      setJoinRoomCode(code);
-      setIsInviteFlow(true);
+    if (room?.gameState.currentPlayerId && watchlist.includes(room.gameState.currentPlayerId)) {
+      const player = room.players.find(p => p.id === room.gameState.currentPlayerId);
+      if (player) {
+        const alertMsg = `WATCHLIST ALERT: ${player.name} is now on the block!`;
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification("Auction Alert", { body: alertMsg, icon: player.imageUrl });
+        }
+      }
+    }
+  }, [room?.gameState.currentPlayerId, watchlist]);
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // --- Init Auth ---
+  useEffect(() => {
+    const saved = roomService.getUserProfile();
+    if (saved) {
+      setProfile(saved);
+      setArchive(roomService.getArchive());
+      setView('HOME');
+    } else {
+      setView('LOGIN');
     }
 
-    // Prompt before leave
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-       if (room) {
-           e.preventDefault();
-           e.returnValue = '';
-       }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [room]);
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('room');
+    if (code) setJoinRoomCode(code.toUpperCase());
+  }, []);
 
-  // --- Subscriptions ---
+  // --- Auction Logic Hooks ---
+  const [countdownText, setCountdownText] = useState("");
+  useEffect(() => {
+    if (!room?.config.scheduledStartTime || room.status !== 'LOBBY') { setCountdownText(""); return; }
+    const interval = setInterval(() => {
+      const diff = room.config.scheduledStartTime! - Date.now();
+      if (diff <= 0) {
+        setCountdownText("Starting now...");
+        if (isHost && room.status === 'LOBBY') handleStartGame();
+        clearInterval(interval);
+      } else {
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        setCountdownText(`${h}h ${m}m ${s}s`);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [room?.config.scheduledStartTime, room?.status, isHost]);
+
   useEffect(() => {
     if (currentUser) {
        const unsub = roomService.subscribe((updated) => {
            setRoom(updated);
-           // Auto-navigate to game/completed
-           if (updated.status === 'ACTIVE' && view === 'LOBBY') {
-               setView('GAME');
-           }
-           if (updated.status === 'COMPLETED' && view !== 'COMPLETED') {
+           const currentView = viewRef.current;
+           if (updated.status === 'ACTIVE' && currentView === 'LOBBY') setView('GAME');
+           if (updated.status === 'COMPLETED' && currentView !== 'COMPLETED' && currentView !== 'ARCHIVE_DETAIL') {
                setView('COMPLETED');
-           }
-           // Reset processing state on player change
-           if (updated.gameState.currentPlayerId !== room?.gameState.currentPlayerId) {
-               setPlayerInsights("");
-               setIsProcessingAction(false);
+               setArchive(roomService.getArchive()); 
            }
        });
        return unsub;
     }
-  }, [currentUser, view, room?.gameState.currentPlayerId]);
+  }, [currentUser]);
 
-  // --- STABLE TIMER LOGIC ---
   useEffect(() => {
     if (!isHost) return;
-
     const interval = setInterval(() => {
-        // Access the TRUE current state from roomService to avoid React Dependency Loop/Jitter
         const r = roomService.currentRoom;
-        
         if (r && r.status === 'ACTIVE' && !r.gameState.isPaused && r.gameState.timer > 0 && r.gameState.currentPlayerId) {
-             roomService.dispatch({ 
-                 type: 'UPDATE_TIMER', 
-                 payload: { timer: r.gameState.timer - 1 } 
-             });
+             roomService.dispatch({ type: 'UPDATE_TIMER', payload: { timer: Number(r.gameState.timer) - 1 } });
         } 
-        // Auto-resolve when timer hits 0 (Host Side)
         else if (r && r.status === 'ACTIVE' && r.gameState.timer === 0 && r.gameState.currentPlayerId && !r.gameState.isPaused) {
-             // We use a small timeout to prevent double-firing in edge cases
-             if (r.gameState.currentBid) {
-                 // Trigger Sold logic if we haven't already paused
-                 handleSold(true);
-             } else {
-                 handleUnsold(true);
-             }
+             if (r.gameState.currentBid) handleSold(); else handleUnsold();
         }
     }, 1000);
-
     return () => clearInterval(interval);
-  }, [isHost]); // Only run setup once for the host
+  }, [isHost]);
 
   // --- Handlers ---
 
-  const handleCreateRoom = async () => {
-    if (!hostRoomName) return alert("Please enter a room name.");
-    
-    // Auto-generate Host Name
-    const effectiveHostName = "Auction Host";
+  const handleLogin = () => {
+    if (!loginName.trim()) return;
+    const p = roomService.saveUserProfile(loginName.trim());
+    setProfile(p);
+    setView('HOME');
+  };
 
+  const handleLogout = () => {
+    if (confirm("Are you sure you want to log out? Local data will persist.")) {
+        setProfile(null);
+        setView('LOGIN');
+    }
+  };
+
+  const handleCreateRoom = async () => {
+    if (!hostRoomName || !profile) return;
     setIsLoading(true);
-    setLoadingMsg("Creating Secure Room...");
     try {
-        const { room, user } = await roomService.createRoom(effectiveHostName, hostRoomName);
+        const { room, user } = await roomService.createRoom(profile, hostRoomName);
         setCurrentUser(user);
         setRoom(room);
         setView('LOBBY');
-    } catch (e) {
-        console.error(e);
-        alert("Failed to create room. PeerJS server might be busy or blocked.");
-    } finally { setIsLoading(false); }
+    } catch (e) { alert("Failed to host."); } 
+    finally { setIsLoading(false); }
   };
 
   const handleJoinRoom = async () => {
-    if (!joinRoomCode) return alert("Please enter the room code.");
-    
-    // Auto-generate Guest Name
-    const effectiveJoinName = `Guest ${Math.floor(Math.random() * 1000)}`;
-
+    if (!joinRoomCode || !profile) return;
     setIsLoading(true);
-    setLoadingMsg("Connecting to Host...");
     try {
-        const { room, user } = await roomService.joinRoom(joinRoomCode.trim(), effectiveJoinName);
-        if (!room) throw new Error("No room data received.");
+        const { room, user } = await roomService.joinRoom(joinRoomCode.trim(), profile);
+        if (!room) throw new Error("No data");
         setCurrentUser(user);
         setRoom(room);
-        // Direct Entry logic
         if (room.status === 'ACTIVE') setView('GAME');
         else if (room.status === 'COMPLETED') setView('COMPLETED');
         else setView('LOBBY');
-    } catch (e: any) {
-        console.error(e);
-        alert(`Connection Failed: ${e.message}`);
-    } finally { setIsLoading(false); }
+    } catch (e) { alert("Room not found or Host offline."); } 
+    finally { setIsLoading(false); }
   };
-
-  const clearInvite = () => {
-      setIsInviteFlow(false);
-      setJoinRoomCode("");
-      const url = new URL(window.location.href);
-      url.searchParams.delete('room');
-      window.history.pushState({}, '', url);
-  };
-
-  const handleEndGame = () => {
-    roomService.dispatch({ type: 'END_GAME', payload: {} });
-    setShowEndConfirmation(false);
-  };
-
-  // --- Logic Dispatchers ---
 
   const handleCreateTeam = () => {
-    if (!room || !currentUser) return;
-    if (room.teams.find(t => t.controlledByUserId === currentUser.id)) return alert("Already have a team");
-    
-    const newTeam: Team = {
-        id: `team_${Date.now()}_${Math.random().toString(36).substr(2,4)}`,
+    if (!room || !profile || !newTeamName) return;
+    const team: Team = {
+        id: `team_${Date.now()}`,
         name: newTeamName,
-        ownerName: newTeamOwner,
+        ownerName: profile.name,
         budget: room.config.totalBudget,
         roster: [],
-        color: TEAM_COLORS[room.teams.length % TEAM_COLORS.length],
-        controlledByUserId: currentUser.id
+        color: newTeamColor,
+        logoUrl: selectedLogoUrl || undefined,
+        controlledByUserId: profile.id
     };
-    roomService.dispatch({ type: 'ADD_TEAM', payload: newTeam });
+    roomService.dispatch({ type: 'ADD_TEAM', payload: team });
+  };
+
+  const handleGenerateLogos = async () => {
+    if (!newTeamName) return alert("Enter team name first");
+    setIsGeneratingLogos(true);
+    try {
+        const logos: string[] = [];
+        for (let i = 0; i < 4; i++) {
+            const logo = await generateTeamLogo(newTeamName, newTeamColor);
+            if (logo) logos.push(logo);
+        }
+        setLogoOptions(logos);
+        if (logos.length > 0) setSelectedLogoUrl(logos[0]);
+    } catch (e) { console.error(e); } finally { setIsGeneratingLogos(false); }
   };
 
   const handleStartGame = () => {
       roomService.dispatch({ type: 'START_GAME', payload: {} });
-      setTimeout(() => bringNextPlayer(), 1000);
+      setTimeout(() => roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} }), 1000);
+  };
+
+  const handleEndGame = () => {
+      roomService.dispatch({ type: 'END_GAME', payload: {} });
+      setShowEndConfirm(false);
+  };
+
+  const handleSold = async () => {
+     const r = roomService.currentRoom;
+     if (!r || !r.gameState.currentPlayerId || !r.gameState.currentBid) return;
+     if (isActionLoading) return;
+
+     setIsActionLoading(true);
+     const player = r.players.find(p => p.id === r.gameState.currentPlayerId);
+     const team = r.teams.find(t => t.id === r.gameState.currentBid?.teamId);
+     if(player && team) {
+         if (!r.gameState.isPaused) roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} }); 
+         const commentary = await generateAuctionCommentary(player, team, r.gameState.currentBid.amount, r.teams);
+         roomService.dispatch({ type: 'SOLD', payload: { commentary } });
+         setTimeout(() => {
+            roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} });
+            setIsActionLoading(false);
+         }, 3500);
+     } else {
+         setIsActionLoading(false);
+     }
+  };
+
+  const handleUnsold = async () => {
+      const r = roomService.currentRoom;
+      if (!r || !r.gameState.currentPlayerId) return;
+      if (isActionLoading) return;
+
+      setIsActionLoading(true);
+      const player = r.players.find(p => p.id === r.gameState.currentPlayerId);
+      if (player) {
+          if (!r.gameState.isPaused) roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} }); 
+          const commentary = await generateUnsoldCommentary(player);
+          roomService.dispatch({ type: 'UNSOLD', payload: { commentary } });
+          setTimeout(() => {
+              roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} });
+              setIsActionLoading(false);
+          }, 2500);
+      } else {
+          setIsActionLoading(false);
+      }
+  };
+
+  const handleGetInsights = async () => {
+    if (!room?.gameState.currentPlayerId) return;
+    setIsInsightsLoading(true);
+    const p = room.players.find(x => x.id === room.gameState.currentPlayerId);
+    if (p) {
+        const text = await getPlayerInsights(p);
+        setPlayerInsights(text);
+    }
+    setIsInsightsLoading(false);
   };
 
   const placeBid = (teamId: string, amount: number) => {
@@ -242,852 +378,308 @@ export default function App() {
       roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} });
   };
 
-  // --- Complex Host Logic ---
-
-  const bringNextPlayer = () => {
-      // Must use current room state from service for consistency during intervals
-      const r = roomService.currentRoom;
-      if (!r || !isHost) return;
-      
-      let next = r.players.find(p => p.pot === r.gameState.currentPot && p.status === 'PENDING');
-      let newPot = r.gameState.currentPot;
-      let logs = [...r.gameState.logs];
-
-      if (!next) {
-         const pots: Pot[] = ['A', 'B', 'C', 'D'];
-         const idx = pots.indexOf(r.gameState.currentPot);
-         if (idx < pots.length - 1) {
-             newPot = pots[idx + 1];
-             next = r.players.find(p => p.pot === newPot && p.status === 'PENDING');
-             if (next) logs.unshift({ id: Date.now().toString(), message: `Moving to Pot ${newPot}`, type: 'SYSTEM', timestamp: new Date() });
-         }
-      }
-
-      // We reconstruct the whole object to ensure React updates
-      const updatedRoom: Room = {
-          ...r,
-          players: next ? r.players.map(p => p.id === next?.id ? { ...p, status: 'ON_AUCTION' } : p) : r.players,
-          gameState: {
-              ...r.gameState,
-              currentPot: newPot,
-              currentPlayerId: next ? next.id : null,
-              currentBid: null,
-              timer: r.config.bidTimerSeconds,
-              aiCommentary: "",
-              logs: next ? [{ id: Date.now().toString(), message: `On Auction: ${next.name}`, type: 'SYSTEM', timestamp: new Date() }, ...logs] : logs,
-              isPaused: !next
-          }
-      };
-      
-      roomService.broadcastSync(updatedRoom);
+  const handleFetchFromSheet = async () => {
+    if (!sheetUrl) return alert("Enter URL");
+    setIsFetchingSheet(true);
+    const matches = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    const sheetId = matches ? matches[1] : null;
+    if (!sheetId) { setIsFetchingSheet(false); return alert("Invalid URL"); }
+    try {
+        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+        const res = await fetch(url);
+        const text = await res.text();
+        const p = parseCSVData(text);
+        if (p.length > 0) setFetchedPreview(p);
+        else alert("No players found in this sheet.");
+    } catch (e) { alert("Fetch failed. Ensure sheet is public or link is correct."); }
+    finally { setIsFetchingSheet(false); }
   };
 
-  const handleSold = async (auto = false) => {
-     if (isProcessingAction && !auto) return;
-     if (!auto) setIsProcessingAction(true);
-
-     // Use Service State
-     const r = roomService.currentRoom;
-     if (!r || !r.gameState.currentPlayerId || !r.gameState.currentBid) return;
-     if (r.gameState.isPaused && auto) return; // Prevent double firing
-
-     const pid = r.gameState.currentPlayerId;
-     const player = r.players.find(p => p.id === pid);
-     const team = r.teams.find(t => t.id === r.gameState.currentBid?.teamId);
-     
-     if(player && team) {
-         // Pause immediately to prevent race conditions while AI thinks
-         roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} }); 
-         
-         const commentary = await generateAuctionCommentary(player, team, r.gameState.currentBid.amount, r.teams);
-         roomService.dispatch({ type: 'SOLD', payload: { commentary } });
-         setTimeout(() => bringNextPlayer(), 4000);
-     }
+  const getFilteredLobbyPlayers = () => {
+    if (!room) return [];
+    return room.players.filter(p => {
+        const matchesSearch = p.name.toLowerCase().includes(lobbySearch.toLowerCase());
+        const matchesPot = lobbyFilterPot === 'ALL' || p.pot === lobbyFilterPot;
+        const matchesRole = lobbyFilterRole === 'ALL' || p.position === lobbyFilterRole;
+        return matchesSearch && matchesPot && matchesRole;
+    });
   };
 
-  const handleUnsold = async (auto = false) => {
-      if (isProcessingAction && !auto) return;
-      if (!auto) setIsProcessingAction(true);
-
-      const r = roomService.currentRoom;
-      if (!r || !r.gameState.currentPlayerId) return;
-      if (r.gameState.isPaused && auto) return;
-
-      const player = r.players.find(p => p.id === r.gameState.currentPlayerId);
-      if (player) {
-          roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} }); 
-          
-          const commentary = await generateUnsoldCommentary(player);
-          roomService.dispatch({ type: 'UNSOLD', payload: { commentary } });
-          setTimeout(() => bringNextPlayer(), 3000);
-      }
+  const toggleWatchlist = (id: string) => {
+    setWatchlist(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
-  // --- Insight Fetcher ---
-  const handleGetInsights = async () => {
-    if (!room?.gameState.currentPlayerId) return;
-    setIsInsightsLoading(true);
-    const p = room.players.find(x => x.id === room?.gameState.currentPlayerId);
-    if (p) {
-        const text = await getPlayerInsights(p);
-        setPlayerInsights(text);
-    }
-    setIsInsightsLoading(false);
+  const savePrivateNote = (playerId: string) => {
+    setPrivateNotes(prev => ({ ...prev, [playerId]: tempNoteValue }));
+    setEditingNotePlayerId(null);
+  };
+
+  // --- VIEWS ---
+
+  if (view === 'LOGIN') {
+      return (
+          <BackgroundWrapper>
+              <div className="min-h-screen flex items-center justify-center p-6">
+                  <div className="max-w-md w-full animate-fade-in">
+                      <div className="text-center mb-12">
+                          <div className="w-20 h-20 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-2xl"><Gavel size={40} className="text-black" strokeWidth={2.5}/></div>
+                          <h1 className="text-4xl font-display font-bold text-white mb-2">Welcome, Owner</h1>
+                          <p className="text-gray-500 font-medium">Create your franchise profile to begin.</p>
+                      </div>
+                      <GlassCard className="p-10 space-y-8">
+                          <input type="text" placeholder="Owner Name" className="w-full bg-black/40 border border-white/10 rounded-2xl p-5 text-white focus:outline-none focus:border-yellow-500/50 transition-all text-lg" value={loginName} onChange={e => setLoginName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()}/>
+                          <button onClick={handleLogin} disabled={!loginName} className="w-full bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-black font-bold py-5 rounded-2xl transition-all shadow-xl disabled:opacity-50">Enter Auction Hall</button>
+                      </GlassCard>
+                  </div>
+              </div>
+          </BackgroundWrapper>
+      );
   }
 
-  // --- Helper: Parsing for Import ---
-  const parseCSVData = (text: string) => {
-    try {
-      const rows = text.trim().split(/\r?\n/);
-      const startIndex = rows[0].toLowerCase().includes("name") ? 1 : 0;
-      const newPlayers: Player[] = [];
-      for(let i=startIndex; i<rows.length; i++) {
-         let cols = rows[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.trim().replace(/^"|"$/g, ''));
-         if (cols.length < 5) continue;
-         const [name, roleRaw, potRaw, imageUrl, iplTeam, basePriceStr] = cols;
-         let position: 'Batter'|'Bowler'|'All Rounder'|'Wicket Keeper' = 'Batter';
-         if (roleRaw?.toUpperCase().includes('WK')) position = 'Wicket Keeper';
-         else if (roleRaw?.toUpperCase().includes('AR')) position = 'All Rounder';
-         else if (roleRaw?.toUpperCase().includes('BOWL')) position = 'Bowler';
-
-         newPlayers.push({
-            id: `sheet-${Date.now()}-${i}`,
-            name, position, pot: (potRaw as Pot) || 'Uncategorized', imageUrl, iplTeam,
-            basePrice: parseInt(basePriceStr?.replace(/[^0-9.]/g, '') || "20"),
-            status: 'PENDING', country: 'TBD'
-         });
-      }
-      return newPlayers;
-    } catch (e) { return []; }
-  };
-
-  const handleFetchFromSheet = async () => {
-      if (!sheetUrl) return alert("Enter URL");
-      setIsFetchingSheet(true);
-      const matches = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      const sheetId = matches ? matches[1] : null;
-      if (!sheetId) { setIsFetchingSheet(false); return alert("Invalid URL"); }
-      
-      try {
-          const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
-          const res = await fetch(url);
-          if (!res.ok) throw new Error("Failed");
-          const text = await res.text();
-          const p = parseCSVData(text);
-          if (p.length > 0) setFetchedPreview(p);
-          else alert("No players found");
-      } catch (e) { alert("Fetch failed. Check URL/Permissions."); }
-      finally { setIsFetchingSheet(false); }
-  };
-
-  const confirmImport = () => {
-      roomService.dispatch({ type: 'IMPORT_PLAYERS', payload: fetchedPreview });
-      setFetchedPreview([]);
-      setShowSettings(false);
-      alert("Imported!");
-  };
-
-  // --- Views ---
-
   if (view === 'HOME') {
+      return (
+          <BackgroundWrapper>
+              <div className="max-w-7xl mx-auto p-6 lg:p-12">
+                  <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-16">
+                      <div className="flex items-center gap-6"><div className="w-20 h-20 rounded-3xl bg-blue-600 flex items-center justify-center text-4xl shadow-2xl border-4 border-white/5 overflow-hidden"><Trophy size={48} className="text-yellow-400" fill="currentColor" /></div><div><h1 className="text-4xl font-display font-bold text-white tracking-tight">Dashboard</h1><p className="text-blue-400 font-medium">Welcome, <span className="text-white underline">{profile?.name}</span></p></div></div>
+                      <button onClick={handleLogout} className="p-4 bg-white/5 hover:bg-red-500/10 text-gray-400 hover:text-red-400 rounded-2xl border border-white/10 transition-all flex items-center gap-2 font-bold text-sm"><LogOut size={18}/> Sign Out</button>
+                  </header>
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+                      <div className="lg:col-span-4 space-y-8"><h2 className="text-xl font-bold flex items-center gap-3 text-green-500"><Play size={20}/> Operations</h2><GlassCard className="p-8 space-y-4"><h3 className="text-lg font-bold">Host Room</h3><input type="text" placeholder="Season Name..." className="w-full bg-black/40 border border-white/10 rounded-xl p-4" value={hostRoomName} onChange={e => setHostRoomName(e.target.value)} /><button onClick={handleCreateRoom} className="w-full bg-blue-600 py-4 rounded-xl font-bold">Launch</button></GlassCard><GlassCard className="p-8 space-y-4"><h3 className="text-lg font-bold">Join Room</h3><input type="text" placeholder="Invite Code..." className="w-full bg-black/40 border border-white/10 rounded-xl p-4 uppercase" value={joinRoomCode} onChange={e => setJoinRoomCode(e.target.value.toUpperCase())} maxLength={6} /><button onClick={handleJoinRoom} className="w-full bg-green-600 py-4 rounded-xl font-bold">Connect</button></GlassCard></div>
+                      <div className="lg:col-span-8 space-y-8"><h2 className="text-xl font-bold flex items-center gap-3 text-yellow-500"><History size={20}/> Past Sessions</h2>{archive.length === 0 ? <GlassCard className="p-20 text-center opacity-40 italic">No historical records yet.</GlassCard> : <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{archive.map((item) => (<GlassCard key={item.roomId} className="p-6 group cursor-pointer hover:border-blue-500/50 hover:scale-[1.02]" onClick={() => { setSelectedArchive(item); setView('ARCHIVE_DETAIL'); }}><div className="flex justify-between items-start mb-6"><div className="w-16 h-16 rounded-2xl bg-black border border-white/10 overflow-hidden flex items-center justify-center p-2 shadow-lg" style={{ borderColor: item.myTeam.color }}>{item.myTeam.logoUrl ? <img src={item.myTeam.logoUrl} className="w-full h-full object-contain" /> : item.myTeam.name[0]}</div><div className="text-right"><span className="text-[10px] text-gray-500 font-bold uppercase">{new Date(item.completedAt).toLocaleDateString()}</span><div className="flex items-center gap-2 text-blue-400 mt-1 font-bold text-xs">Review <ChevronRight size={14}/></div></div></div><h4 className="text-2xl font-bold mb-1 truncate">{item.myTeam.name}</h4><p className="text-xs text-gray-500 uppercase tracking-wider">{item.roomName}</p></GlassCard>))}</div>}</div>
+                  </div>
+              </div>
+          </BackgroundWrapper>
+      );
+  }
+
+  if (view === 'ARCHIVE_DETAIL' && selectedArchive) {
+      const t = selectedArchive.myTeam;
+      return (
+          <BackgroundWrapper><div className="max-w-5xl mx-auto p-8 lg:p-16"><button onClick={() => setView('HOME')} className="mb-10 text-gray-500 hover:text-white flex items-center gap-2 font-bold uppercase text-xs transition-colors"><ArrowRight className="rotate-180" size={16}/> Back</button><GlassCard className="p-10 lg:p-16 relative overflow-hidden"><div className="flex flex-col md:flex-row items-center gap-10 mb-12 border-b border-white/5 pb-12"><div className="w-40 h-40 rounded-[2.5rem] bg-black border-4 border-white/10 shadow-2xl flex items-center justify-center p-6" style={{ borderColor: t.color }}>{t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <Trophy size={60} className="text-gray-800"/>}</div><div className="text-center md:text-left"><h1 className="text-5xl font-display font-bold text-white mb-2">{t.name}</h1><p className="text-xl text-gray-400 mb-6 font-light">Squad from <span className="text-blue-400">{selectedArchive.roomName}</span></p></div></div><div className="space-y-4">{t.roster.map((p, idx) => (<div key={idx} className="flex items-center justify-between p-5 bg-white/5 rounded-2xl border border-white/5"><div className="flex items-center gap-5"><div className="w-12 h-12 rounded-full overflow-hidden border border-white/10">{p.imageUrl ? <img src={p.imageUrl} className="w-full h-full object-cover" /> : <User className="p-3 text-gray-600"/>}</div><div><p className="font-bold text-lg">{p.name}</p><p className="text-[10px] text-gray-500 uppercase font-bold">{p.position}</p></div></div><div className="text-right"><p className="text-lg font-bold text-yellow-500">{p.soldPrice} L</p></div></div>))}</div></GlassCard></div></BackgroundWrapper>
+      );
+  }
+
+  if (view === 'LOBBY' || view === 'GAME' || view === 'COMPLETED') {
     return (
       <BackgroundWrapper>
-      <div className="min-h-screen flex items-center justify-center p-4">
-         <div className="max-w-6xl w-full grid grid-cols-1 md:grid-cols-2 gap-16 relative">
-            {/* Left Side: Branding */}
-            <div className="flex flex-col justify-center space-y-10">
+        {view === 'LOBBY' && (
+          <div className="max-w-6xl mx-auto p-12 animate-fade-in">
+            <GlassCard className="p-10 mb-10 flex flex-col md:flex-row justify-between items-center gap-6">
                 <div>
-                  <div className="flex items-center gap-3 mb-6">
-                     <div className="w-16 h-16 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-2xl flex items-center justify-center shadow-lg shadow-yellow-500/20">
-                        <Trophy size={32} className="text-white" strokeWidth={3} />
-                     </div>
-                     <span className="text-sm font-bold tracking-widest text-blue-400 uppercase border border-blue-500/30 px-4 py-1.5 rounded-full bg-blue-500/10">Official Simulator</span>
+                  <h2 className="text-4xl font-display font-bold text-white mb-2">{room?.name}</h2>
+                  <div className="flex items-center gap-3">
+                    <span className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 px-4 py-1 rounded-full font-bold text-xs uppercase tracking-widest">Lobby</span>
+                    {countdownText && <span className="text-xs font-bold text-blue-400 flex items-center gap-2 animate-pulse"><Clock size={14}/> {countdownText}</span>}
+                    {isHost && (<button onClick={() => setShowSettings(true)} className="flex items-center gap-2 text-xs font-bold text-gray-400 hover:text-white transition-colors"><Settings size={14}/> Settings</button>)}
                   </div>
-                  <h1 className="text-7xl font-display font-bold text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400 mb-6 tracking-tight leading-none">
-                    IPL <br/> <span className="text-white">AUCTION</span>
-                  </h1>
-                  <p className="text-gray-400 text-xl max-w-lg font-light leading-relaxed">
-                    Experience the thrill of the hammer. The most advanced real-time P2P auction simulator for cricket enthusiasts.
-                  </p>
                 </div>
-                
-                <div className="space-y-6 max-w-md">
-                   {isLoading ? (
-                       <GlassCard className="p-12 flex flex-col items-center justify-center min-h-[300px]">
-                           <Loader2 size={48} className="animate-spin text-yellow-500 mb-6"/>
-                           <p className="text-xl font-medium animate-pulse">{loadingMsg}</p>
-                       </GlassCard>
-                   ) : (
-                       <>
-                       {/* Create Room Flow */}
-                       {!isInviteFlow && (
-                         <GlassCard className="p-8 hover:bg-white/10 group cursor-default">
-                            <h2 className="text-xl font-semibold text-white mb-6 flex items-center gap-3">
-                               <div className="p-2 bg-green-500/20 rounded-lg text-green-400 group-hover:bg-green-500 group-hover:text-white transition-colors"><Plus size={20}/></div>
-                               Host Auction
-                            </h2>
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 ml-1">Room Name</label>
-                                    <input 
-                                      type="text" 
-                                      placeholder="e.g. Sunday League" 
-                                      className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-white focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/50 transition-all placeholder:text-gray-600" 
-                                      value={hostRoomName} 
-                                      onChange={e => setHostRoomName(e.target.value)} 
-                                    />
-                                </div>
-                                <button onClick={handleCreateRoom} className="w-full bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white font-semibold py-4 rounded-xl transition-all shadow-lg shadow-green-900/20 active:scale-[0.98]">
-                                  Create Room
+                <div className="flex items-center gap-6"><div className="bg-black/40 border border-white/10 px-6 py-3 rounded-2xl cursor-pointer hover:bg-black/60 transition-colors" onClick={() => { navigator.clipboard.writeText(room?.id || ""); alert("Code copied!"); }}><span className="text-[10px] text-gray-500 font-bold uppercase block mb-1">Invite Code</span><div className="flex items-center gap-2"><span className="text-2xl font-mono font-bold text-blue-400">{room?.id}</span><Copy size={16} className="text-gray-600"/></div></div>{isHost && (<button onClick={handleStartGame} className="bg-green-600 hover:bg-green-500 px-10 py-5 rounded-2xl font-bold shadow-xl transition-all scale-105 active:scale-95">START AUCTION</button>)}</div>
+            </GlassCard>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+                <div className="lg:col-span-5"><GlassCard className="p-8"><h3 className="text-xl font-bold mb-8 flex items-center gap-3 text-blue-500"><Plus size={24}/> Franchise Registration</h3>{!myTeam ? (<div className="space-y-8"><input type="text" placeholder="Team Name" className="w-full bg-black/40 border border-white/10 rounded-2xl p-5 text-lg font-medium" value={newTeamName} onChange={e => setNewTeamName(e.target.value)} /><div className="space-y-4"><label className="text-xs text-gray-400 font-bold uppercase tracking-widest flex items-center gap-2"><Palette size={14}/> Franchise Colors</label><div className="flex flex-wrap gap-3 p-4 bg-black/20 rounded-2xl border border-white/5">{TEAM_COLORS.map(c => (<button key={c} onClick={() => setNewTeamColor(c)} className={`w-10 h-10 rounded-full border-4 transition-all ${newTeamColor === c ? 'border-white scale-110 shadow-xl' : 'border-transparent hover:scale-105'}`} style={{ backgroundColor: c }} />))}</div></div><div className="space-y-4 p-6 bg-black/30 rounded-3xl border border-white/10"><div className="flex justify-between items-center mb-4"><label className="text-xs text-gray-400 font-bold uppercase tracking-widest flex items-center gap-2"><ImageIcon size={14}/> AI Branding</label><button onClick={handleGenerateLogos} disabled={isGeneratingLogos || !newTeamName} className="text-[10px] font-bold text-yellow-500 hover:text-yellow-400 flex items-center gap-2 bg-yellow-500/10 px-4 py-2 rounded-full transition-all disabled:opacity-30">{isGeneratingLogos ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12}/>} Generate</button></div>{isGeneratingLogos ? (<div className="flex flex-col items-center justify-center py-10 gap-4"><Loader2 size={32} className="animate-spin text-yellow-500" /><p className="text-xs text-gray-500 animate-pulse font-medium">Drafting identity...</p></div>) : logoOptions.length > 0 ? (<div className="grid grid-cols-2 gap-4">{logoOptions.map((logo, idx) => (<div key={idx} onClick={() => setSelectedLogoUrl(logo)} className={`aspect-square rounded-2xl bg-black border-4 transition-all cursor-pointer overflow-hidden p-2 flex items-center justify-center ${selectedLogoUrl === logo ? 'border-yellow-500 shadow-xl scale-105' : 'border-white/5 hover:border-white/20'}`}><img src={logo} className="w-full h-full object-contain" /></div>))}</div>) : (<div className="py-10 text-center border-2 border-dashed border-white/5 rounded-2xl"><p className="text-xs text-gray-600 px-6">Provide a name to generate AI identities</p></div>)}</div><button onClick={handleCreateTeam} disabled={!newTeamName} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-5 rounded-2xl font-bold shadow-xl transition-all disabled:opacity-50">REGISTER TEAM</button></div>) : (<div className="text-center py-10"><div className="w-40 h-40 rounded-[2.5rem] bg-black border-4 mx-auto mb-6 flex items-center justify-center p-4 shadow-2xl" style={{ borderColor: myTeam.color }}>{myTeam.logoUrl ? <img src={myTeam.logoUrl} className="w-full h-full object-contain" /> : <Trophy size={60} className="text-white/10"/>}</div><h4 className="text-3xl font-display font-bold text-white mb-1">{myTeam.name}</h4><p className="text-blue-400 font-medium">{profile?.name}</p><span className="mt-8 inline-block text-[10px] font-bold text-green-500 bg-green-500/10 px-4 py-2 rounded-full uppercase tracking-widest border border-green-500/20">Franchise Active</span></div>)}</GlassCard></div>
+                <div className="lg:col-span-7 flex flex-col gap-8"><GlassCard className="flex flex-col h-full overflow-hidden"><div className="flex bg-white/5 border-b border-white/10"><button onClick={() => setLobbyView('TEAMS')} className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${lobbyView === 'TEAMS' ? 'text-blue-400 border-b-2 border-blue-400 bg-white/5' : 'text-gray-500 hover:text-gray-300'}`}><Users size={16}/> Teams</button><button onClick={() => setLobbyView('PLAYERS')} className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${lobbyView === 'PLAYERS' ? 'text-pink-400 border-b-2 border-pink-400 bg-white/5' : 'text-gray-500 hover:text-gray-300'}`}><Activity size={16}/> Player Browser</button></div><div className="p-8 flex-1 overflow-y-auto custom-scrollbar min-h-[500px]">{lobbyView === 'TEAMS' ? (<div className="animate-fade-in grid grid-cols-1 sm:grid-cols-2 gap-4">{room?.teams.map(t => (<div key={t.id} className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center gap-4 hover:bg-white/10 transition-all group"><div className="w-14 h-14 rounded-xl bg-black border border-white/10 flex items-center justify-center p-2 shadow-lg" style={{ borderColor: t.color }}>{t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <Gavel size={20}/>}</div><div><p className="font-bold text-white">{t.name}</p><p className="text-xs text-gray-500">{t.ownerName}</p></div></div>))}</div>) : (<div className="animate-fade-in space-y-6"><div className="grid grid-cols-1 sm:grid-cols-3 gap-4"><div className="relative"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/><input type="text" placeholder="Search..." className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-xs focus:outline-none" value={lobbySearch} onChange={e => setLobbySearch(e.target.value)}/></div><div className="relative"><Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"/><select className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-xs appearance-none focus:outline-none" value={lobbyFilterPot} onChange={e => setLobbyFilterPot(e.target.value as any)}><option value="ALL">All Pots</option><option value="A">Pot A</option><option value="B">Pot B</option></select></div></div><div className="space-y-3">{getFilteredLobbyPlayers().map(p => (<div key={p.id} className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-3 hover:border-white/10 transition-all group"><div className="flex justify-between items-center"><div className="flex items-center gap-4"><div className="w-10 h-10 bg-gray-800 rounded-full border border-white/10 overflow-hidden">{p.imageUrl ? <img src={p.imageUrl} className="w-full h-full object-cover"/> : <User className="text-gray-600" size={20}/>}</div><div><h4 className="font-bold text-white text-sm">{p.name}</h4><div className="flex items-center gap-2"><span className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">{p.position}</span><span className="text-[9px] text-yellow-500 font-bold">Pot {p.pot}</span></div></div></div><div className="flex items-center gap-3"><span className="text-xs font-mono font-bold text-white">{p.basePrice} L</span><button onClick={() => toggleWatchlist(p.id)} className={`p-2 rounded-lg transition-all ${watchlist.includes(p.id) ? 'text-pink-500' : 'text-gray-500 hover:text-pink-400'}`}><Star size={16} fill={watchlist.includes(p.id) ? "currentColor" : "none"}/></button><button onClick={() => { setEditingNotePlayerId(p.id); setTempNoteValue(privateNotes[p.id] || ""); }} className={`p-2 rounded-lg transition-all ${privateNotes[p.id] ? 'text-yellow-500' : 'text-gray-500 hover:text-white'}`}><FileText size={16}/></button></div></div>{editingNotePlayerId === p.id && (<div className="bg-black/40 p-3 rounded-xl border border-white/10"><textarea autoFocus value={tempNoteValue} onChange={e => setTempNoteValue(e.target.value)} className="w-full bg-transparent text-xs text-white focus:outline-none min-h-[50px]"/><div className="flex justify-end gap-3 mt-2"><button onClick={() => setEditingNotePlayerId(null)} className="text-[9px] font-bold text-gray-500 uppercase">Cancel</button><button onClick={() => savePrivateNote(p.id)} className="bg-yellow-600 text-white px-3 py-1 rounded-lg text-[9px] font-bold">Save</button></div></div>)}</div>))}</div></div>)}</div></GlassCard></div>
+            </div>
+          </div>
+        )}
+
+        {view === 'GAME' && room && (
+            <div className="flex h-screen overflow-hidden animate-fade-in">
+                {/* Sidebar */}
+                <div className="w-80 bg-black/40 border-r border-white/10 flex flex-col backdrop-blur-3xl z-30">
+                    <div className="p-6 border-b border-white/10">
+                        <h2 className="text-2xl font-display font-bold text-yellow-500 tracking-wider">AUCTION HUB</h2>
+                        <div className="flex items-center gap-2 mt-2">
+                            <span className={`w-2 h-2 rounded-full ${room.gameState.isPaused ? 'bg-red-500' : 'bg-green-500 animate-pulse'}`}></span>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{room.gameState.isPaused ? 'Paused' : 'Live'}</span>
+                        </div>
+                    </div>
+                    {isHost && (
+                        <div className="p-4 flex flex-col gap-3 border-b border-white/5">
+                            <div className="grid grid-cols-2 gap-2">
+                                <button onClick={togglePause} className="bg-yellow-500 hover:bg-yellow-400 text-black py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95">
+                                    {room.gameState.isPaused ? <Play size={20} fill="currentColor"/> : <Pause size={20} fill="currentColor"/>}
+                                    {room.gameState.isPaused ? 'RESUME' : 'PAUSE'}
+                                </button>
+                                <button onClick={() => setShowEndConfirm(true)} className="bg-red-600 hover:bg-red-500 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-red-900/40 border border-red-500/20">
+                                    <StopCircle size={20}/> END
                                 </button>
                             </div>
-                         </GlassCard>
-                       )}
-
-                       {/* Join Room Flow */}
-                       <GlassCard className={`p-8 hover:bg-white/10 group cursor-default ${!isInviteFlow ? 'mt-4' : ''}`}>
-                          <h2 className="text-xl font-semibold text-white mb-6 flex items-center gap-3">
-                             <div className="p-2 bg-blue-500/20 rounded-lg text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors"><ArrowRight size={20}/></div>
-                             {isInviteFlow ? 'Join Invited Room' : 'Join Room'}
-                          </h2>
-                          <div className="space-y-4">
-                              <div>
-                                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 ml-1">Room Code</label>
-                                  <input 
-                                    type="text" 
-                                    placeholder="e.g. X7K9P2" 
-                                    className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono uppercase tracking-widest focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all placeholder:text-gray-600" 
-                                    maxLength={6} 
-                                    value={joinRoomCode} 
-                                    onChange={e => setJoinRoomCode(e.target.value.toUpperCase())} 
-                                    disabled={isInviteFlow}
-                                  />
-                              </div>
-                              <button onClick={handleJoinRoom} className="w-full bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white font-semibold py-4 rounded-xl transition-all shadow-lg shadow-blue-900/20 active:scale-[0.98]">
-                                Join Room
-                              </button>
-                              {isInviteFlow && <button onClick={clearInvite} className="w-full text-gray-500 text-sm hover:text-white underline mt-2">Cancel Invite</button>}
-                          </div>
-                       </GlassCard>
-                       </>
-                   )}
+                            <button onClick={() => roomService.dispatch({type:'NEXT_PLAYER', payload:{}})} className="bg-white/5 hover:bg-white/10 text-white py-3 rounded-xl flex items-center justify-center gap-2 font-bold text-xs border border-white/5"><SkipForward size={16}/> FORCE NEXT</button>
+                        </div>
+                    )}
+                    <div className="flex bg-white/5 border-b border-white/5">
+                        <button onClick={() => setSidebarTab('LOGS')} className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${sidebarTab === 'LOGS' ? 'text-blue-400 border-b-2 border-blue-400 bg-white/5' : 'text-gray-500 hover:text-gray-300'}`}><List size={12}/> Logs</button>
+                        <button onClick={() => setSidebarTab('WATCHLIST')} className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${sidebarTab === 'WATCHLIST' ? 'text-pink-400 border-b-2 border-pink-400 bg-white/5' : 'text-gray-500 hover:text-gray-300'}`}><Star size={12}/> Watchlist</button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                        {sidebarTab === 'LOGS' ? (
+                            <div className="space-y-4">{room.gameState.logs.map(log => (<div key={log.id} className="p-4 bg-white/5 rounded-2xl border-l-4 border-white/10" style={{ borderLeftColor: log.type === 'BID' ? '#3b82f6' : log.type === 'SOLD' ? '#22c55e' : log.type === 'UNSOLD' ? '#ef4444' : undefined }}><p className="text-xs text-gray-300">{log.message}</p><span className="text-[9px] text-gray-600">{new Date(log.timestamp).toLocaleTimeString()}</span></div>))}</div>
+                        ) : (
+                            <div className="space-y-3">
+                                {watchlist.length === 0 ? (
+                                    <div className="text-center py-20 opacity-30 text-[10px] uppercase font-bold tracking-widest">No players in watchlist</div>
+                                ) : room.players.filter(p => watchlist.includes(p.id)).map(p => {
+                                  const hasNote = !!privateNotes[p.id];
+                                  return (
+                                    <div key={p.id} className={`p-3 bg-pink-500/5 rounded-xl border border-pink-500/20 flex flex-col gap-2 transition-all`}>
+                                        <div className="flex justify-between items-center">
+                                          <div><p className="text-xs font-bold text-white">{p.name}</p><p className="text-[9px] text-gray-500 uppercase">{p.position}</p></div>
+                                          <div className="flex items-center gap-2">
+                                              <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full ${p.status === 'SOLD' ? 'bg-green-500/20 text-green-400' : p.status === 'UNSOLD' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>{p.status}</span>
+                                              <button onClick={() => toggleWatchlist(p.id)} className="text-pink-500"><Star size={14} fill="currentColor"/></button>
+                                              <button onClick={() => { setEditingNotePlayerId(p.id); setTempNoteValue(privateNotes[p.id] || ""); }} className={`p-1 rounded-md transition-all ${hasNote ? 'text-yellow-500' : 'text-gray-600 hover:text-gray-400'}`}><FileText size={14}/></button>
+                                          </div>
+                                        </div>
+                                        {editingNotePlayerId === p.id && (
+                                            <div className="bg-black/40 p-2 rounded-lg border border-white/10 animate-fade-in"><textarea autoFocus value={tempNoteValue} onChange={e => setTempNoteValue(e.target.value)} className="w-full bg-transparent text-[10px] text-white focus:outline-none min-h-[40px]"/><div className="flex justify-end gap-2 mt-1"><button onClick={() => setEditingNotePlayerId(null)} className="text-[8px] font-bold text-gray-500 uppercase">Cancel</button><button onClick={() => savePrivateNote(p.id)} className="bg-yellow-600 text-white px-2 py-0.5 rounded text-[8px] font-bold">Save</button></div></div>
+                                        )}
+                                        {hasNote && editingNotePlayerId !== p.id && <p className="text-[9px] text-yellow-500/60 italic border-t border-white/5 pt-1 mt-1">{privateNotes[p.id]}</p>}
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                        )}
+                    </div>
                 </div>
-            </div>
-            
-            {/* Right Side: Recent Rooms */}
-            {!isInviteFlow && (
-              <div className="hidden md:flex flex-col justify-center">
-                  <GlassCard className="p-8 h-[650px] overflow-hidden relative shadow-2xl bg-black/20">
-                     <h3 className="text-gray-500 font-medium text-xs tracking-[0.2em] uppercase mb-8 border-b border-white/5 pb-4">Recent Sessions</h3>
-                     
-                     <div className="space-y-3 overflow-y-auto h-[550px] pr-2 custom-scrollbar">
-                        {roomService.getHistory().length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-full text-gray-600 opacity-50">
-                                <Activity size={48} className="mb-4 text-white/20"/>
-                                <p>No recent activity</p>
+
+                {/* Main Arena */}
+                <div className="flex-1 flex flex-col relative">
+                    <div className="h-20 bg-black/20 border-b border-white/10 px-8 flex items-center justify-between z-10 backdrop-blur-md">
+                        <div className="flex items-center gap-12">
+                          <div><span className="text-[10px] text-gray-500 font-bold uppercase block mb-0.5">Pot {room.gameState.currentPot}</span><span className="text-xl font-display font-bold text-blue-400">{room.players.filter(p => p.status === 'PENDING').length} Left</span></div>
+                          <div className="flex items-center gap-8 border-l border-white/10 pl-10">
+                             <div className="flex items-center gap-3"><Activity size={18} className="text-green-500"/><div className="flex flex-col"><span className="text-[10px] text-gray-500 font-bold uppercase leading-none">Sold Today</span><span className="text-sm font-bold text-white">{soldCount}</span></div></div>
+                             {highestBidPlayer && (
+                                <div className="flex items-center gap-3"><TrendingUp size={18} className="text-yellow-500"/><div className="flex flex-col"><span className="text-[10px] text-gray-500 font-bold uppercase leading-none">Highest Bid</span><span className="text-sm font-bold text-white truncate max-w-[120px]">{highestBidPlayer.name} ({highestBidPlayer.soldPrice}L)</span></div></div>
+                             )}
+                          </div>
+                        </div>
+                        {room.gameState.aiCommentary && <div className="hidden lg:flex bg-purple-500/10 border border-purple-500/20 px-6 py-2 rounded-full max-w-md"><Sparkles size={16} className="text-purple-400 mr-3 shrink-0 mt-1"/><p className="text-[11px] italic text-purple-200 line-clamp-2">"{room.gameState.aiCommentary}"</p></div>}
+                    </div>
+
+                    <div className="flex-1 p-8 flex items-center justify-center relative overflow-hidden">
+                        {room.gameState.currentPlayerId ? (
+                            <div className="max-w-6xl w-full grid grid-cols-1 lg:grid-cols-12 gap-10 z-10">
+                                <div className="lg:col-span-5"><GlassCard className="h-[520px] flex flex-col overflow-hidden relative border-white/20">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.imageUrl ? <img src={room.players.find(p => p.id === room.gameState.currentPlayerId)?.imageUrl} className="w-full h-full object-contain bg-gradient-to-b from-gray-800 to-black" /> : <div className="w-full h-full bg-gray-900 flex items-center justify-center text-white/10"><User size={120}/></div>}<div className="absolute bottom-0 w-full p-8 bg-gradient-to-t from-black to-transparent pt-20"><h2 className="text-4xl font-display font-bold text-white mb-1 drop-shadow-xl">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.name}</h2><p className="text-lg text-blue-400 font-medium">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.position}</p></div></GlassCard></div>
+                                <div className="lg:col-span-7 flex flex-col gap-6">
+                                    <GlassCard className="flex-1 flex flex-col items-center justify-center p-10 relative">
+                                        <div className="text-center mb-8"><span className={`text-[120px] font-display font-bold leading-none ${room.gameState.timer <= 5 ? 'text-red-500 animate-pulse' : 'text-white'}`}>{room.gameState.timer}</span></div>
+                                        <div className="w-full max-w-sm bg-black/40 rounded-3xl p-8 border border-white/10 shadow-2xl">
+                                            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-[0.3em] mb-4 text-center">Current Highest Bid</p>
+                                            {room.gameState.currentBid ? (
+                                                <div className="text-center animate-fade-in"><div className="text-6xl font-display font-bold text-white mb-2">{room.gameState.currentBid.amount} <span className="text-2xl text-gray-500">L</span></div><div className="inline-block px-6 py-2 rounded-full font-bold text-white text-sm" style={{ backgroundColor: room.teams.find(t => t.id === room.gameState.currentBid?.teamId)?.color }}>{room.teams.find(t => t.id === room.gameState.currentBid?.teamId)?.name}</div></div>
+                                            ) : (
+                                                <div className="text-center py-6 border-2 border-dashed border-white/5 rounded-2xl italic text-gray-600">Waiting for bids... (Base: {room.players.find(p => p.id === room.gameState.currentPlayerId)?.basePrice}L)</div>
+                                            )}
+                                        </div>
+
+                                        {isHost && (
+                                            <div className="mt-8 grid grid-cols-2 gap-4 w-full max-w-sm">
+                                                <button onClick={handleSold} disabled={!room.gameState.currentBid || isActionLoading} className="bg-green-600 hover:bg-green-500 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-30 transition-all active:scale-95">
+                                                  {isActionLoading ? <Loader2 size={20} className="animate-spin" /> : <UserCheck size={20}/>}
+                                                  {isActionLoading ? 'PROCESSING' : 'SELL NOW'}
+                                                </button>
+                                                <button onClick={handleUnsold} disabled={isActionLoading} className="bg-red-600 hover:bg-red-500 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-30">
+                                                  {isActionLoading ? <Loader2 size={20} className="animate-spin" /> : <UserMinus size={20}/>}
+                                                  {isActionLoading ? 'PROCESSING' : 'UNSOLD'}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </GlassCard>
+                                    <div className="grid grid-cols-1 gap-6">{playerInsights ? <GlassCard className="p-6 bg-blue-500/10 border-blue-500/20"><h4 className="text-xs font-bold text-blue-400 uppercase flex items-center gap-2 mb-2"><Sparkles size={14}/> Scout Summary</h4><p className="text-sm italic text-blue-100">"{playerInsights}"</p></GlassCard> : <button onClick={handleGetInsights} disabled={isInsightsLoading} className="bg-white/5 hover:bg-white/10 py-4 rounded-2xl text-xs font-bold uppercase text-gray-400 border border-white/10 transition-all">{isInsightsLoading ? <Loader2 size={16} className="animate-spin mx-auto"/> : 'Query AI Scout'}</button>}</div>
+                                </div>
                             </div>
                         ) : (
-                            roomService.getHistory().map((h: any) => (
-                                <div key={h.id} className="group flex justify-between items-center bg-white/5 p-5 rounded-2xl border border-white/5 hover:bg-white/10 hover:border-white/20 cursor-pointer transition-all" onClick={() => { setJoinRoomCode(h.id); }}>
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center text-gray-400 font-bold group-hover:text-white transition-colors shadow-inner">
-                                            {h.name[0]}
-                                        </div>
-                                        <div>
-                                            <p className="font-semibold text-white group-hover:text-blue-400 transition-colors text-lg">{h.name}</p>
-                                            <p className="text-xs text-gray-500">{new Date(h.createdAt).toLocaleDateString()}</p>
-                                        </div>
-                                    </div>
-                                    <div className="bg-black/30 px-3 py-1 rounded-lg text-gray-400 font-mono text-sm group-hover:bg-blue-500/20 group-hover:text-blue-300 transition-colors">
-                                        {h.id}
-                                    </div>
-                                </div>
-                            ))
+                            <div className="text-center opacity-30"><Gavel size={100} className="mx-auto mb-6"/><h3 className="text-3xl font-display font-bold">Waiting for Player</h3></div>
                         )}
-                     </div>
-                  </GlassCard>
-              </div>
-            )}
-         </div>
-      </div>
+                    </div>
+
+                    <div className="h-44 bg-black/80 border-t border-white/10 backdrop-blur-3xl px-8 flex items-center gap-6 overflow-x-auto custom-scrollbar">
+                        {room.teams.map(t => {
+                            const isWinning = room.gameState.currentBid?.teamId === t.id;
+                            const isMyTeam = t.controlledByUserId === profile?.id;
+                            const currentAmt = room.gameState.currentBid?.amount || 0;
+                            const player = room.players.find(p => p.id === room.gameState.currentPlayerId);
+                            const baseAmt = player?.basePrice || 0;
+                            
+                            // Owner choices: increment by 10 or 20
+                            const nextBid10 = Math.max(baseAmt, currentAmt + 10);
+                            const nextBid20 = Math.max(baseAmt + 10, currentAmt + 20);
+                            
+                            return (
+                                <div key={t.id} className={`shrink-0 w-72 p-4 rounded-2xl border transition-all ${isWinning ? 'bg-green-500/10 border-green-500' : 'bg-white/5 border-white/5'} ${isMyTeam ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-black' : ''}`}>
+                                    <div className="flex items-center gap-3 mb-3"><div className="w-10 h-10 rounded-lg bg-black border-2 flex items-center justify-center p-1" style={{ borderColor: t.color }}>{t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <Gavel size={16}/>}</div><div className="flex-1 overflow-hidden"><p className="text-xs font-bold text-white truncate">{t.name}</p><p className="text-[10px] text-yellow-500 font-mono">{t.budget} L LEFT</p></div></div>
+                                    {isMyTeam && room.gameState.currentPlayerId && !room.gameState.isPaused && !isWinning ? (
+                                        <div className="grid grid-cols-2 gap-2">
+                                          <button onClick={() => placeBid(t.id, nextBid10)} disabled={t.budget < nextBid10} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[10px] font-bold text-white shadow-lg disabled:opacity-50">+{nextBid10 - currentAmt} (Bid {nextBid10}L)</button>
+                                          <button onClick={() => placeBid(t.id, nextBid20)} disabled={t.budget < nextBid20} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[10px] font-bold text-white shadow-lg disabled:opacity-50">+{nextBid20 - currentAmt} (Bid {nextBid20}L)</button>
+                                        </div>
+                                    ) : isWinning ? <div className="w-full bg-green-500 py-2 rounded-xl text-[10px] font-bold text-black text-center animate-pulse">LEADING</div> : <div className="w-full bg-white/5 py-2 rounded-xl text-[10px] font-bold text-gray-500 text-center">SPECTATING</div>}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {view === 'COMPLETED' && (
+            <div className="min-h-screen flex flex-col items-center justify-center p-12 animate-fade-in"><Trophy size={100} className="text-yellow-500 mb-8" fill="currentColor"/><h1 className="text-6xl font-display font-bold text-white mb-4">Auction Concluded</h1><p className="text-gray-400 text-xl mb-16 text-center max-w-2xl">The hammer has fallen for the last time. Your squad rosters are now stored in the hall of fame.</p><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 w-full max-w-6xl mb-16">{room?.teams.map(t => (<GlassCard key={t.id} className="p-8"><div className="flex items-center gap-5 mb-8"><div className="w-20 h-20 rounded-2xl bg-black border-4 flex items-center justify-center p-3 shadow-xl" style={{ borderColor: t.color }}>{t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <Trophy size={32}/>}</div><div><h3 className="text-2xl font-bold">{t.name}</h3><p className="text-gray-500 font-medium">{t.ownerName}</p></div></div><div className="flex justify-between mb-2"><span className="text-xs text-gray-500 font-bold uppercase">Players</span><span className="font-bold">{t.roster.length}</span></div><div className="flex justify-between"><span className="text-xs text-gray-500 font-bold uppercase">Final Value</span><span className="font-bold text-yellow-500">{t.roster.reduce((sum, p) => sum + (p.soldPrice || 0), 0)} L</span></div></GlassCard>))}</div><button onClick={() => setView('HOME')} className="bg-white text-black px-12 py-5 rounded-3xl font-bold shadow-2xl hover:bg-gray-200 transition-all flex items-center gap-3"><History size={20}/> RETURN TO DASHBOARD</button></div>
+        )}
+
+        {/* End Auction Confirmation Modal */}
+        {showEndConfirm && (
+           <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-6">
+              <GlassCard className="max-w-md w-full p-10 text-center space-y-8 animate-fade-in border-red-500/30">
+                 <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto"><AlertCircle size={48} className="text-red-500" /></div>
+                 <div>
+                    <h3 className="text-2xl font-bold mb-3">Terminate Auction?</h3>
+                    <p className="text-gray-400 text-sm">This will permanently finalize all current rosters and close the auction hall for all participants. This action cannot be undone.</p>
+                 </div>
+                 <div className="flex gap-4">
+                    <button onClick={() => setShowEndConfirm(false)} className="flex-1 bg-white/5 py-4 rounded-2xl font-bold hover:bg-white/10 transition-all">Cancel</button>
+                    <button onClick={handleEndGame} className="flex-1 bg-red-600 py-4 rounded-2xl font-bold hover:bg-red-500 transition-all shadow-xl shadow-red-900/40">Yes, Finalize</button>
+                 </div>
+              </GlassCard>
+           </div>
+        )}
+
+        {showSettings && (
+         <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 backdrop-blur-md"><GlassCard className="w-full max-w-4xl border-white/10 flex flex-col max-h-[90vh] bg-[#0a0a0a]"><div className="p-8 border-b border-white/10 flex justify-between items-center"><h2 className="text-2xl font-bold">Auction Management</h2><button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white"><XCircle size={28}/></button></div><div className="flex border-b border-white/10 px-8 bg-white/5">
+           <button onClick={() => setActiveSettingsTab('config')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='config'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Financials</button>
+           <button onClick={() => setActiveSettingsTab('schedule')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='schedule'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Scheduling</button>
+           <button onClick={() => setActiveSettingsTab('import')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='import'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Import Data</button>
+         </div><div className="p-8 overflow-y-auto flex-1 custom-scrollbar">
+           {activeSettingsTab === 'config' && (<div className="grid grid-cols-1 md:grid-cols-2 gap-8"><div className="bg-white/5 p-6 rounded-2xl border border-white/5"><label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Total Franchise Budget (L)</label><input type="number" value={room?.config.totalBudget} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div><div className="bg-white/5 p-6 rounded-2xl border border-white/5"><label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Bid Increments (L)</label><input type="number" value={room?.config.minBidIncrement} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {minBidIncrement: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div></div>)}
+           {activeSettingsTab === 'schedule' && (
+             <div className="bg-white/5 p-8 rounded-2xl border border-white/5">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-3 text-white"><Calendar size={20} className="text-yellow-500"/> Future Start Time</h3>
+                <div className="space-y-4">
+                    <p className="text-xs text-gray-500">Set a date and time for the auction to automatically go live for all connected participants.</p>
+                    <input 
+                        type="datetime-local" 
+                        className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-white focus:outline-none focus:border-yellow-500/50"
+                        onChange={(e) => {
+                            const time = new Date(e.target.value).getTime();
+                            if (time > Date.now()) roomService.dispatch({ type: 'UPDATE_CONFIG', payload: { scheduledStartTime: time } });
+                        }}
+                        value={room?.config.scheduledStartTime ? new Date(room.config.scheduledStartTime - (new Date().getTimezoneOffset() * 60000)).toISOString().slice(0, 16) : ""}
+                    />
+                    {room?.config.scheduledStartTime && <button onClick={() => roomService.dispatch({ type: 'UPDATE_CONFIG', payload: { scheduledStartTime: undefined } })} className="text-red-400 text-xs font-bold uppercase tracking-widest hover:underline">Cancel Auto-Start</button>}
+                </div>
+            </div>
+           )}
+           {activeSettingsTab === 'import' && (<div className="space-y-6">
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               <div><label className="text-xs text-gray-500 font-bold uppercase mb-2 block">Google Sheet URL</label><input type="text" placeholder="https://docs.google.com/spreadsheets/d/..." value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
+               <div><label className="text-xs text-gray-500 font-bold uppercase mb-2 block">Sheet Tab Name</label><input type="text" placeholder="e.g. Players" value={sheetName} onChange={e => setSheetName(e.target.value)} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
+             </div>
+             <button onClick={handleFetchFromSheet} className="bg-blue-600 hover:bg-blue-500 px-8 py-4 rounded-xl text-sm font-bold flex items-center gap-2 transition-all">{isFetchingSheet ? <Loader2 size={16} className="animate-spin"/> : <Download size={16}/>} Fetch CSV Data</button>{fetchedPreview.length > 0 && (<div className="bg-green-500/10 border border-green-500/20 p-6 rounded-2xl animate-fade-in"><div className="flex items-center gap-3 text-green-400 mb-4 font-bold"><CheckCircle size={20}/> Found {fetchedPreview.length} profiles</div><button onClick={() => { roomService.dispatch({ type: 'IMPORT_PLAYERS', payload: fetchedPreview }); setFetchedPreview([]); setShowSettings(false); }} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-bold">Load Into Hall</button></div>)}</div>)}</div></GlassCard></div>
+        )}
       </BackgroundWrapper>
     );
   }
 
-  // --- COMPLETED VIEW ---
-  if (view === 'COMPLETED' && room) {
-     const sortedTeams = [...room.teams].sort((a,b) => b.roster.reduce((sum,p) => sum + (p.soldPrice||0), 0) - a.roster.reduce((sum,p) => sum + (p.soldPrice||0), 0));
-     return (
-        <BackgroundWrapper>
-        <div className="min-h-screen p-8 flex flex-col items-center">
-            <h1 className="text-5xl font-display font-bold text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-yellow-600 mb-12 drop-shadow-lg">Auction Summary</h1>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 w-full max-w-7xl">
-                {sortedTeams.map((team, idx) => {
-                   const spent = team.roster.reduce((sum, p) => sum + (p.soldPrice||0), 0);
-                   return (
-                       <GlassCard key={team.id} className="p-6 relative overflow-hidden group hover:border-white/20">
-                           {idx === 0 && <div className="absolute top-0 right-0 bg-yellow-500 text-black text-xs font-bold px-3 py-1 rounded-bl-xl shadow-lg">WINNER</div>}
-                           <div className="flex items-center gap-4 mb-6">
-                               <div className={`w-14 h-14 rounded-2xl ${team.color} shadow-lg flex items-center justify-center text-xl font-bold`}>{team.name[0]}</div>
-                               <div>
-                                  <h2 className="text-2xl font-bold leading-tight">{team.name}</h2>
-                                  <p className="text-sm text-gray-400">{team.ownerName}</p>
-                               </div>
-                           </div>
-                           <div className="flex justify-between mb-3 text-sm text-gray-400 bg-black/20 p-3 rounded-xl">
-                               <span className="font-medium">Spent</span>
-                               <span className="font-mono text-white">{spent} / {room.config.totalBudget}</span>
-                           </div>
-                           <div className="flex justify-between mb-6 text-sm text-gray-400 bg-black/20 p-3 rounded-xl">
-                               <span className="font-medium">Squad Size</span>
-                               <span className="font-mono text-white">{team.roster.length}</span>
-                           </div>
-                           <div className="space-y-2 h-64 overflow-y-auto pr-2 custom-scrollbar">
-                               {team.roster.map(p => (
-                                   <div key={p.id} className="flex justify-between items-center text-sm bg-white/5 p-3 rounded-xl border border-white/5">
-                                       <span className="font-medium">{p.name}</span>
-                                       <span className="font-mono font-bold text-yellow-500">{p.soldPrice} L</span>
-                                   </div>
-                               ))}
-                           </div>
-                       </GlassCard>
-                   );
-                })}
-            </div>
-            <button onClick={() => window.location.reload()} className="mt-12 bg-white text-black px-8 py-4 rounded-full font-bold hover:bg-gray-200 transition-all shadow-xl hover:shadow-2xl hover:-translate-y-1">Back to Home</button>
-        </div>
-        </BackgroundWrapper>
-     );
-  }
-
-  // --- LOBBY & GAME VIEW (Shared) ---
-  const gameView = view === 'GAME';
-
-  return (
-    <BackgroundWrapper>
-    <div className={`min-h-screen text-white flex flex-col ${gameView ? 'md:flex-row' : 'items-center p-4'}`}>
-      
-      {/* LOBBY VIEW CONTAINER */}
-      {!gameView && (
-        <div className="max-w-6xl w-full animate-fade-in py-12">
-             {/* Header */}
-             <GlassCard className="flex justify-between items-center mb-8 p-8">
-                <div>
-                   <h2 className="text-4xl font-display font-bold text-white tracking-tight">{room?.name}</h2>
-                   <div className="flex items-center gap-4 mt-4">
-                      <span className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 px-3 py-1 rounded-full font-bold text-xs uppercase tracking-wider">Lobby</span>
-                      <div className="flex items-center gap-3 bg-black/30 px-4 py-1.5 rounded-full border border-white/10 cursor-pointer hover:bg-black/50 transition-colors" onClick={() => { navigator.clipboard.writeText(room?.id || ""); alert("Copied!"); }}>
-                         <span className="text-gray-400 text-xs font-bold uppercase">Code</span>
-                         <span className="font-mono text-lg font-bold text-blue-400">{room?.id}</span>
-                         <Copy size={14} className="text-gray-500"/>
-                      </div>
-                      <div className="flex items-center gap-3 bg-blue-500/10 px-4 py-1.5 rounded-full border border-blue-500/20 cursor-pointer hover:bg-blue-500/20 transition-colors" onClick={() => { navigator.clipboard.writeText(shareUrl); alert("Copied!"); }}>
-                         <Share2 size={14} className="text-blue-400"/>
-                         <span className="text-xs font-bold text-blue-200">Share Link</span>
-                      </div>
-                   </div>
-                </div>
-                <div className="flex items-center gap-4">
-                   {isHost ? (
-                      <button onClick={handleStartGame} className="bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white px-8 py-4 rounded-xl font-bold shadow-lg shadow-green-900/40 animate-pulse transition-all transform hover:scale-105">START AUCTION</button>
-                   ) : (
-                      <div className="text-right bg-black/20 px-6 py-3 rounded-xl border border-white/5"><p className="text-gray-400 text-sm">Waiting for host...</p><p className="text-xs text-gray-500 font-mono mt-1">{currentUser?.name}</p></div>
-                   )}
-                   <button onClick={() => window.location.reload()} className="p-4 bg-white/5 rounded-xl hover:bg-white/10 text-gray-400 border border-white/10 transition-colors"><LogOut size={20}/></button>
-                </div>
-             </GlassCard>
-             
-             {isHost && (
-                <div className="mb-8 bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-xl flex items-center gap-4 shadow-lg backdrop-blur-sm">
-                    <AlertCircle className="text-yellow-500 flex-shrink-0" />
-                    <p className="text-sm text-yellow-200">
-                        <strong>Important:</strong> Do not close or refresh this tab. You are the host server. 
-                        If you leave, the room will close for everyone.
-                    </p>
-                </div>
-             )}
-
-             <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-                <div className="md:col-span-4 space-y-8">
-                    <GlassCard className="p-8">
-                        <h3 className="text-lg font-bold mb-6 flex items-center gap-3 text-gray-200"><User size={20} className="text-blue-500"/> My Team</h3>
-                        {!myTeam ? (
-                           <div className="space-y-4">
-                              <input type="text" className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-600" value={newTeamName} onChange={e => setNewTeamName(e.target.value)} placeholder="Team Name" />
-                              <input type="text" className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-600" value={newTeamOwner} onChange={e => setNewTeamOwner(e.target.value)} placeholder="Owner Name" />
-                              <button onClick={handleCreateTeam} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold shadow-lg shadow-blue-900/20">Register Team</button>
-                           </div>
-                        ) : (
-                           <div className="text-center py-8 bg-black/20 rounded-2xl border border-white/5 cursor-pointer hover:bg-black/30 transition-all group" onClick={() => setSelectedTeamId(myTeam.id)}>
-                              <div className={`w-20 h-20 rounded-2xl ${myTeam.color} mx-auto flex items-center justify-center text-3xl font-bold mb-4 shadow-lg group-hover:scale-110 transition-transform duration-300`}>{myTeam.name[0]}</div>
-                              <h4 className="text-xl font-bold text-white">{myTeam.name}</h4>
-                              <p className="text-gray-500 text-sm mt-1">{myTeam.ownerName}</p>
-                              <span className="text-xs text-blue-400 mt-4 block font-medium uppercase tracking-wider">Click to view details</span>
-                           </div>
-                        )}
-                    </GlassCard>
-                    {isHost && (
-                        <GlassCard className="p-8">
-                           <h3 className="text-lg font-bold mb-6 flex items-center gap-3 text-gray-200"><Settings size={20} className="text-gray-400"/> Configuration</h3>
-                           <button onClick={() => setShowSettings(true)} className="w-full bg-white/5 hover:bg-white/10 text-white py-4 rounded-xl border border-white/10 flex items-center justify-center gap-2 transition-all font-medium">Manage Settings</button>
-                        </GlassCard>
-                    )}
-                </div>
-                <div className="md:col-span-8">
-                    <GlassCard className="p-8 h-full">
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-lg font-bold flex items-center gap-3 text-gray-200"><Users size={20} className="text-purple-500"/> Participating Teams ({room?.teams.length})</h3>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {room?.teams.map(team => (
-                            <div key={team.id} className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center gap-4 cursor-pointer hover:bg-white/10 hover:border-white/20 transition-all group" onClick={() => setSelectedTeamId(team.id)}>
-                                <div className={`w-12 h-12 rounded-xl ${team.color} flex items-center justify-center font-bold text-lg shadow-md group-hover:scale-105 transition-transform`}>{team.name[0]}</div>
-                                <div><p className="font-bold text-white group-hover:text-blue-400 transition-colors">{team.name}</p><p className="text-xs text-gray-500">{team.ownerName}</p></div>
-                                {team.controlledByUserId === room.hostId && <Crown size={16} className="text-yellow-500 ml-auto drop-shadow-md"/>}
-                            </div>
-                            ))}
-                        </div>
-                        <div className="mt-8 border-t border-white/10 pt-6">
-                            <h4 className="text-xs font-bold text-gray-500 uppercase mb-4 tracking-wider">Connected Members</h4>
-                            <div className="flex flex-wrap gap-2">
-                                {room?.members.map(m => (
-                                    <span key={m.userId} className="text-xs bg-black/40 text-gray-300 px-3 py-1.5 rounded-full border border-white/10 flex items-center gap-2">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div> {m.name}
-                                    </span>
-                                ))}
-                            </div>
-                        </div>
-                    </GlassCard>
-                </div>
-             </div>
-        </div>
-      )}
-
-      {/* GAME VIEW */}
-      {gameView && (
-          <>
-          {/* Sidebar */}
-          <div className="w-full md:w-80 bg-black/40 backdrop-blur-xl border-r border-white/10 flex flex-col h-[50vh] md:h-screen z-20 shadow-2xl">
-            <div className="p-6 border-b border-white/10 bg-white/5">
-              <h1 className="text-2xl font-display font-bold text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-yellow-600 tracking-wider">IPL AUCTION</h1>
-              <div className="flex items-center gap-2 mt-2 text-xs font-bold tracking-widest uppercase">
-                <span className={`w-2 h-2 rounded-full ${room?.gameState.isPaused ? 'bg-red-500 animate-pulse' : 'bg-green-500 animate-pulse'}`}></span>
-                <span className={room?.gameState.isPaused ? 'text-red-400' : 'text-green-400'}>{room?.gameState.isPaused ? 'PAUSED' : 'LIVE'}</span>
-              </div>
-            </div>
-            
-            {isHost && (
-                <div className="p-6 grid grid-cols-2 gap-3 border-b border-white/5">
-                    <button onClick={togglePause} className="bg-yellow-500 hover:bg-yellow-400 text-black p-3 rounded-xl flex items-center justify-center gap-2 col-span-2 font-bold transition-colors shadow-lg">
-                        {room?.gameState.isPaused ? <><Play size={18} fill="currentColor"/> RESUME</> : <><Pause size={18} fill="currentColor"/> PAUSE</>}
-                    </button>
-                    <button onClick={() => bringNextPlayer()} className="col-span-2 bg-white/10 hover:bg-white/20 text-white p-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium border border-white/10 transition-all"><SkipForward size={16} /> Force Next</button>
-                    <button onClick={() => setShowEndConfirmation(true)} className="col-span-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 p-3 rounded-xl flex items-center justify-center gap-2 text-sm mt-2 border border-red-500/20 transition-all"><StopCircle size={16} /> End Auction</button>
-                </div>
-            )}
-            
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col-reverse custom-scrollbar">
-                {room?.gameState.logs.map(log => (
-                    <div key={log.id} className="text-sm border-l-2 border-white/10 pl-3 py-1 animate-fade-in">
-                        <p className={`font-medium ${
-                            log.type==='BID'?'text-blue-300':
-                            log.type==='SOLD'?'text-green-400':
-                            log.type==='UNSOLD'?'text-red-400':
-                            log.type==='AI' ? 'text-purple-300 italic':
-                            'text-gray-400'
-                        }`}>
-                            {log.message}
-                        </p>
-                        <span className="text-[10px] text-gray-600">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                    </div>
-                ))}
-            </div>
-          </div>
-
-          {/* Main Stage */}
-          <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
-             <div className="shrink-0 h-24 bg-black/20 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-8 z-10">
-                <div className="flex items-center gap-12 w-full">
-                   {/* Header Stats */}
-                   <div className="flex flex-col">
-                       <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Current Pot</span>
-                       <div className="flex items-baseline gap-2">
-                           <span className="font-bold text-3xl text-yellow-500 font-display">POT {room?.gameState.currentPot}</span>
-                           <span className="text-xs text-gray-400 font-medium">({room?.players.filter(p => p.pot === room.gameState.currentPot && p.status === 'PENDING').length} Remaining)</span>
-                       </div>
-                   </div>
-                   
-                   <div className="hidden md:flex gap-8 border-l border-white/10 pl-8">
-                       <div className="flex flex-col">
-                           <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Sold Today</span>
-                           <span className="text-xl font-bold text-white">{room?.players.filter(p => p.status === 'SOLD').length}</span>
-                       </div>
-                       <div className="flex flex-col">
-                           <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Highest Bid</span>
-                           {(() => {
-                               const highest = [...(room?.players||[])].filter(p => p.status === 'SOLD').sort((a,b) => (b.soldPrice||0) - (a.soldPrice||0))[0];
-                               return highest ? (
-                                   <div className="flex flex-col">
-                                       <span className="text-sm font-bold text-white">{highest.name}</span>
-                                       <span className="text-xs text-green-400 font-mono">{highest.soldPrice} L</span>
-                                   </div>
-                               ) : <span className="text-sm text-gray-600 italic">None yet</span>;
-                           })()}
-                       </div>
-                   </div>
-
-                   {room?.gameState.aiCommentary && (
-                       <div className="hidden xl:flex ml-auto items-center gap-3 bg-purple-500/10 border border-purple-500/20 px-6 py-2 rounded-full max-w-md">
-                           <Activity size={16} className="text-purple-400 flex-shrink-0"/>
-                           <p className="text-sm italic text-purple-200 truncate">"{room.gameState.aiCommentary}"</p>
-                       </div>
-                   )}
-                </div>
-             </div>
-             
-             {/* Center Stage - Scrollable Area */}
-             <div className="flex-1 overflow-y-auto overflow-x-hidden relative w-full scrollbar-hide">
-                 <div className="min-h-full flex flex-col items-center justify-center p-4 md:p-8 pb-32"> {/* Added pb-32 for extra scroll space */}
-                    <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
-
-                    {room?.gameState.currentPlayerId ? (
-                         <div className="w-full max-w-7xl grid grid-cols-1 md:grid-cols-12 gap-6 z-10">
-                            
-                            {/* Player Card */}
-                            <div className="md:col-span-5 relative flex flex-col">
-                                <GlassCard className="flex flex-col overflow-hidden border-white/20 relative group h-full min-h-[500px]">
-                                    <div className="absolute top-4 left-4 z-20 flex gap-2">
-                                        <span className="bg-blue-600/90 backdrop-blur-md text-white text-xs px-3 py-1 rounded-md uppercase font-bold tracking-wider shadow-lg">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.position}</span>
-                                        <span className="bg-white/10 backdrop-blur-md text-gray-200 text-xs px-3 py-1 rounded-md uppercase font-bold tracking-wider border border-white/10">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.country}</span>
-                                    </div>
-                                    
-                                    <div className="flex-1 relative bg-gradient-to-b from-gray-800 to-black overflow-hidden">
-                                        {room.players.find(p => p.id === room.gameState.currentPlayerId)?.imageUrl ? 
-                                            <img src={room.players.find(p => p.id === room.gameState.currentPlayerId)?.imageUrl} className="h-full w-full object-cover object-top mix-blend-normal hover:scale-105 transition-transform duration-700"/> : 
-                                            <div className="h-full flex items-center justify-center text-white/10"><User size={150}/></div>
-                                        }
-                                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent"></div>
-                                        
-                                        {/* Player Info Overlay */}
-                                        <div className="absolute bottom-0 w-full p-8 z-20">
-                                            <h2 className="text-5xl font-display font-bold text-white leading-none drop-shadow-2xl mb-2">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.name}</h2>
-                                            <div className="flex items-center gap-3">
-                                                <p className="text-gray-300 font-medium text-lg">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.iplTeam || "Uncapped"}</p>
-                                                <div className="h-1 w-1 bg-gray-500 rounded-full"></div>
-                                                <span className="text-blue-400 font-bold tracking-widest text-sm uppercase">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.stats}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Stats / Form Search Bar */}
-                                    <div className="bg-black/40 backdrop-blur-md border-t border-white/10 p-4">
-                                        {playerInsights ? (
-                                            <div className="text-sm text-gray-300 bg-blue-900/20 p-3 rounded-xl border border-blue-500/20 animate-fade-in">
-                                                <div className="flex items-center gap-2 mb-1 text-blue-400 text-xs font-bold uppercase"><Sparkles size={12}/> Recent Form</div>
-                                                {playerInsights}
-                                            </div>
-                                        ) : (
-                                            <button 
-                                                onClick={handleGetInsights} 
-                                                disabled={isInsightsLoading}
-                                                className="w-full flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 p-4 rounded-xl transition-all border border-white/10 hover:border-white/20 group"
-                                            >
-                                                {isInsightsLoading ? <Loader2 size={16} className="animate-spin text-blue-400"/> : <Search size={16} className="text-blue-400 group-hover:scale-110 transition-transform"/>}
-                                                Search for recent form
-                                            </button>
-                                        )}
-                                    </div>
-
-                                    <div className="p-5 bg-white/5 border-t border-white/10 flex justify-between items-center">
-                                        <div className="flex flex-col">
-                                            <span className="text-[10px] uppercase text-gray-500 font-bold tracking-widest">Base Price</span>
-                                            <span className="text-3xl font-display font-bold text-white">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.basePrice} <span className="text-lg text-gray-500">L</span></span>
-                                        </div>
-                                        <div className="text-right">
-                                            <span className="text-[10px] text-gray-500 block uppercase font-bold tracking-widest">Role</span>
-                                            <span className="text-lg text-white font-medium">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.position}</span>
-                                        </div>
-                                    </div>
-                                </GlassCard>
-                            </div>
-
-                            {/* Bidding Control Center */}
-                            <div className="md:col-span-7 flex flex-col gap-6 h-full min-h-[500px]">
-                                <GlassCard className="flex-1 flex flex-col items-center justify-center p-8 relative border-white/20 bg-gradient-to-br from-white/5 to-transparent">
-                                    <div className="relative mb-8 text-center">
-                                       <div className="absolute inset-0 bg-red-500/10 blur-3xl rounded-full transform scale-150"></div>
-                                       <span className={`relative text-[120px] leading-none font-display font-bold drop-shadow-2xl ${room.gameState.timer <= 5 ? 'text-red-500 animate-pulse' : 'text-white'}`}>{room.gameState.timer}<span className="text-4xl text-gray-500 ml-2">s</span></span>
-                                    </div>
-                                    
-                                    <div className="w-full max-w-md bg-black/60 backdrop-blur-xl rounded-2xl p-8 border border-white/10 shadow-2xl relative overflow-hidden">
-                                        <p className="text-gray-500 text-xs uppercase font-bold tracking-[0.3em] mb-6 text-center">Current Highest Bid</p>
-                                        
-                                        {room.gameState.currentBid ? (
-                                            <div className="bg-gradient-to-b from-green-500 to-green-600 rounded-xl p-6 text-center shadow-lg transform transition-all animate-fade-in relative overflow-hidden">
-                                                <div className="absolute inset-0 bg-white/10 mix-blend-overlay"></div>
-                                                <div className="relative z-10">
-                                                    <div className="text-6xl font-display font-bold text-white mb-1">{room.gameState.currentBid.amount}</div>
-                                                    <div className="text-xs text-green-100 font-bold tracking-widest mb-4">LAKHS</div>
-                                                    <div className="inline-flex items-center gap-2 bg-black/20 px-4 py-1.5 rounded-full backdrop-blur-sm">
-                                                        <div className={`w-2 h-2 rounded-full ${room.teams.find(t => t.id === room.gameState.currentBid?.teamId)?.color}`}></div>
-                                                        <span className="text-sm font-bold text-white">{room.teams.find(t => t.id === room.gameState.currentBid?.teamId)?.name}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <div className="bg-white/5 rounded-xl p-6 text-center border border-white/5 min-h-[160px] flex items-center justify-center flex-col">
-                                                <span className="text-gray-600 italic mb-2">Waiting for opening bid...</span>
-                                                <div className="h-1 w-12 bg-gray-700 rounded-full"></div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* HOST CONTROLS */}
-                                    {isHost && (
-                                        <div className="absolute bottom-6 right-6 flex flex-col gap-2">
-                                             <div className="flex gap-3">
-                                                <button 
-                                                    onClick={() => handleUnsold(false)} 
-                                                    disabled={isProcessingAction}
-                                                    className={`
-                                                        group relative px-6 py-3 rounded-xl border border-red-500/30 font-bold text-sm transition-all overflow-hidden
-                                                        ${isProcessingAction ? 'opacity-50 cursor-not-allowed bg-red-900/20' : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 hover:border-red-500/50 hover:shadow-[0_0_20px_rgba(239,68,68,0.3)]'}
-                                                    `}
-                                                >
-                                                    <span className="relative z-10 flex items-center gap-2">
-                                                        <XCircle size={16}/> Mark Unsold
-                                                    </span>
-                                                </button>
-
-                                                {room.gameState.currentBid && (
-                                                    <button 
-                                                        onClick={() => handleSold(false)}
-                                                        disabled={isProcessingAction} 
-                                                        className={`
-                                                            group relative px-8 py-3 rounded-xl border border-green-500/30 font-bold text-sm transition-all overflow-hidden
-                                                            ${isProcessingAction ? 'opacity-50 cursor-not-allowed bg-green-900/20' : 'bg-green-500/10 hover:bg-green-500/20 text-green-400 hover:text-green-300 hover:border-green-500/50 hover:shadow-[0_0_20px_rgba(34,197,94,0.3)]'}
-                                                        `}
-                                                    >
-                                                        <span className="relative z-10 flex items-center gap-2">
-                                                            <Gavel size={16}/> Mark Sold
-                                                        </span>
-                                                    </button>
-                                                )}
-                                             </div>
-                                             {isProcessingAction && <span className="text-[10px] text-gray-500 text-center animate-pulse">Processing...</span>}
-                                        </div>
-                                    )}
-                                </GlassCard>
-                            </div>
-                         </div>
-                    ) : (
-                        <div className="text-center opacity-40 flex flex-col items-center">
-                            <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-6 border border-white/10">
-                              <Gavel size={48} className="text-white"/>
-                            </div>
-                            <h2 className="text-3xl font-bold text-white tracking-tight">Waiting for next player...</h2>
-                            <p className="text-gray-400 mt-2">The host will bring the next player to the auction floor.</p>
-                        </div>
-                    )}
-                 </div>
-             </div>
-
-             {/* Bottom Team Strip */}
-             <div className="shrink-0 z-30 bg-black/80 backdrop-blur-xl border-t border-white/10 p-4 md:p-6 overflow-x-auto">
-                <div className="flex gap-6 min-w-max pb-2">
-                    {room?.teams.map(team => {
-                        const isWinning = room.gameState.currentBid?.teamId === team.id;
-                        const isMyTeam = team.controlledByUserId === currentUser?.id;
-                        const currentAmount = room.gameState.currentBid?.amount || 0;
-                        const base = room.players.find(p => p.id === room.gameState.currentPlayerId)?.basePrice || 0;
-                        
-                        // Bidding Increments
-                        const minInc = 10;
-                        const stdInc = room.config.minBidIncrement;
-                        const baseBid = currentAmount > 0 ? currentAmount : base;
-                        const bid10 = baseBid + minInc;
-                        const bidStd = baseBid + stdInc;
-
-                        return (
-                            <div key={team.id} 
-                                 className={`w-80 bg-white/5 rounded-2xl p-4 border transition-all duration-300 relative cursor-pointer group ${isWinning ? 'border-green-500 bg-green-500/10 shadow-[0_0_30px_rgba(34,197,94,0.1)]' : isMyTeam ? 'border-blue-500/50 bg-blue-500/5' : 'border-white/5 hover:bg-white/10 hover:border-white/20'}`}
-                                 onClick={() => setSelectedTeamId(team.id)}
-                            >
-                                <div className="flex justify-between items-start mb-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className={`w-8 h-8 rounded-lg ${team.color} shadow-lg flex items-center justify-center text-xs font-bold`}>{team.name[0]}</div>
-                                        <div className="flex flex-col">
-                                            <span className="text-xs font-bold text-white leading-none mb-1 max-w-[120px] truncate">{team.name}</span>
-                                            <span className="text-[10px] text-gray-500 uppercase tracking-wider">{team.ownerName}</span>
-                                        </div>
-                                    </div>
-                                    <span className="text-[10px] bg-black/40 px-2 py-1 rounded text-gray-400 border border-white/5">{team.roster.length}/{room.config.maxPlayers}</span>
-                                </div>
-                                
-                                <div className="flex justify-between items-center bg-black/30 p-2.5 rounded-xl mb-3 border border-white/5">
-                                    <span className="text-[10px] uppercase text-gray-500 font-bold">Purse</span>
-                                    <span className="font-mono font-bold text-yellow-500">{team.budget} L</span>
-                                </div>
-
-                                {isWinning ? <div className="w-full bg-green-500 text-black text-center py-2 rounded-xl text-xs font-bold shadow-lg animate-pulse">CURRENTLY LEADING</div> : 
-                                 (!room.gameState.currentPlayerId || room.gameState.isPaused) ? <div className="w-full bg-white/5 text-gray-500 text-center py-2 rounded-xl text-xs font-medium border border-white/5">Waiting</div> :
-                                 (isHost || isMyTeam) ? (
-                                    <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                                        <button onClick={() => placeBid(team.id, bid10)} className="flex-1 bg-white/10 hover:bg-blue-600 hover:text-white text-gray-300 py-2 rounded-xl text-xs font-bold transition-all border border-white/10">+{minInc}L</button>
-                                        <button onClick={() => placeBid(team.id, bidStd)} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-xl text-xs font-bold transition-all shadow-lg shadow-blue-900/30">+{stdInc}L</button>
-                                    </div>
-                                 ) :
-                                 <div className="w-full bg-white/5 text-center py-2 rounded-xl text-xs text-gray-500">Spectating</div>
-                                }
-                            </div>
-                        );
-                    })}
-                </div>
-             </div>
-          </div>
-          </>
-      )}
-
-      {/* DETAILED TEAM MODAL */}
-      {selectedTeamId && room && (
-          <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-md animate-fade-in">
-             <GlassCard className="w-full max-w-3xl border-white/10 max-h-[85vh] flex flex-col bg-[#0a0a0a]/90">
-                 {(() => {
-                     const t = room.teams.find(x => x.id === selectedTeamId);
-                     if (!t) return null;
-                     const spent = t.roster.reduce((sum, p) => sum + (p.soldPrice||0), 0);
-                     return (
-                         <>
-                             <div className="p-8 border-b border-white/10 flex justify-between items-center">
-                                 <div className="flex items-center gap-6">
-                                     <div className={`w-16 h-16 rounded-2xl ${t.color} flex items-center justify-center font-bold text-3xl shadow-lg`}>{t.name[0]}</div>
-                                     <div>
-                                         <h2 className="text-3xl font-bold text-white tracking-tight">{t.name}</h2>
-                                         <p className="text-gray-400 text-sm mt-1">{t.ownerName}</p>
-                                     </div>
-                                 </div>
-                                 <button onClick={() => setSelectedTeamId(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors"><XCircle className="text-gray-400 hover:text-white" size={28}/></button>
-                             </div>
-                             <div className="p-8 grid grid-cols-3 gap-6 border-b border-white/10 bg-white/5">
-                                 <div className="text-center p-4 bg-black/20 rounded-2xl border border-white/5">
-                                     <p className="text-gray-500 text-xs uppercase font-bold tracking-widest mb-1">Budget Left</p>
-                                     <p className="text-2xl font-display font-bold text-green-400">{t.budget}</p>
-                                 </div>
-                                 <div className="text-center p-4 bg-black/20 rounded-2xl border border-white/5">
-                                     <p className="text-gray-500 text-xs uppercase font-bold tracking-widest mb-1">Spent</p>
-                                     <p className="text-2xl font-display font-bold text-red-400">{spent}</p>
-                                 </div>
-                                 <div className="text-center p-4 bg-black/20 rounded-2xl border border-white/5">
-                                     <p className="text-gray-500 text-xs uppercase font-bold tracking-widest mb-1">Squad</p>
-                                     <p className="text-2xl font-display font-bold text-blue-400">{t.roster.length} / {room.config.maxPlayers}</p>
-                                 </div>
-                             </div>
-                             <div className="p-8 overflow-y-auto flex-1 custom-scrollbar">
-                                 <h3 className="font-bold mb-6 text-gray-400 text-xs uppercase tracking-[0.2em]">Squad List</h3>
-                                 {t.roster.length === 0 ? <div className="text-center py-12 text-gray-600 italic">No players purchased yet.</div> : (
-                                     <div className="space-y-3">
-                                         {t.roster.map(p => (
-                                             <div key={p.id} className="flex justify-between items-center bg-white/5 p-4 rounded-2xl border border-white/5 hover:border-white/10 transition-colors group">
-                                                 <div className="flex items-center gap-4">
-                                                     <div className="w-10 h-10 bg-gray-800 rounded-full overflow-hidden border border-white/10">
-                                                        {p.imageUrl ? <img src={p.imageUrl} className="w-full h-full object-cover"/> : <User className="p-2 text-gray-400"/>}
-                                                     </div>
-                                                     <div>
-                                                         <p className="font-bold text-white text-lg">{p.name}</p>
-                                                         <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">{p.position}</p>
-                                                     </div>
-                                                 </div>
-                                                 <span className="font-mono font-bold text-yellow-500 text-lg">{p.soldPrice} L</span>
-                                             </div>
-                                         ))}
-                                     </div>
-                                 )}
-                             </div>
-                         </>
-                     );
-                 })()}
-             </GlassCard>
-          </div>
-      )}
-
-      {/* END GAME CONFIRMATION MODAL */}
-      {showEndConfirmation && (
-          <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 backdrop-blur-md">
-              <GlassCard className="max-w-md w-full p-8 border-red-500/30 text-center bg-[#0a0a0a]">
-                  <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <AlertCircle className="w-10 h-10 text-red-500"/>
-                  </div>
-                  <h2 className="text-3xl font-bold text-white mb-4">End Auction?</h2>
-                  <p className="text-gray-400 mb-8 leading-relaxed">Are you sure you want to stop the auction? This action cannot be undone and will show the final results to all participants.</p>
-                  <div className="flex gap-4">
-                      <button onClick={() => setShowEndConfirmation(false)} className="flex-1 bg-white/10 hover:bg-white/20 text-white py-4 rounded-xl font-bold transition-all border border-white/10">Cancel</button>
-                      <button onClick={handleEndGame} className="flex-1 bg-red-600 hover:bg-red-500 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-red-900/40">Yes, End It</button>
-                  </div>
-              </GlassCard>
-          </div>
-      )}
-
-      {/* SETTINGS MODAL */}
-      {showSettings && (
-         <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 backdrop-blur-md">
-             <GlassCard className="w-full max-w-4xl border-white/10 flex flex-col max-h-[90vh] bg-[#0a0a0a]">
-                 <div className="p-8 border-b border-white/10 flex justify-between items-center"><h2 className="text-2xl font-bold">Configuration</h2><button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white"><XCircle size={28}/></button></div>
-                 <div className="flex border-b border-white/10 px-8 bg-white/5">
-                     <button onClick={() => setActiveSettingsTab('config')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='config'?'border-blue-500 text-blue-400':'border-transparent text-gray-400 hover:text-white'}`}>General</button>
-                     <button onClick={() => setActiveSettingsTab('teams')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='teams'?'border-blue-500 text-blue-400':'border-transparent text-gray-400 hover:text-white'}`}>Teams</button>
-                     <button onClick={() => setActiveSettingsTab('import')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='import'?'border-blue-500 text-blue-400':'border-transparent text-gray-400 hover:text-white'}`}>Import Data</button>
-                 </div>
-                 <div className="p-8 overflow-y-auto flex-1 custom-scrollbar">
-                     {activeSettingsTab === 'config' && (
-                         <div className="grid grid-cols-2 gap-8">
-                            <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
-                                <label className="text-xs text-gray-500 font-bold uppercase tracking-wider flex items-center gap-2 mb-3"><DollarSign size={14}/> Team Budget (Lakhs)</label>
-                                <input type="number" value={room?.config.totalBudget} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none focus:border-blue-500/50 text-xl font-mono"/>
-                            </div>
-                            <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
-                                <label className="text-xs text-gray-500 font-bold uppercase tracking-wider flex items-center gap-2 mb-3"><Clock size={14}/> Bid Timer (Seconds)</label>
-                                <input type="number" value={room?.config.bidTimerSeconds} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {bidTimerSeconds: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none focus:border-blue-500/50 text-xl font-mono"/>
-                            </div>
-                         </div>
-                     )}
-                     {activeSettingsTab === 'teams' && (
-                         <div className="space-y-3">
-                             {room?.teams.map(t => (
-                                 <div key={t.id} className="flex justify-between bg-white/5 p-4 rounded-xl items-center border border-white/5">
-                                     <div className="flex items-center gap-4">
-                                         <div className={`w-8 h-8 rounded-full ${t.color}`}></div>
-                                         <span className="font-bold">{t.name}</span>
-                                     </div>
-                                     <button onClick={() => roomService.dispatch({type:'REMOVE_TEAM', payload:{teamId: t.id}})} className="text-red-400 hover:bg-red-500/20 p-2 rounded-lg transition-colors"><Trash2 size={18}/></button>
-                                 </div>
-                             ))}
-                             {room?.teams.length === 0 && <p className="text-gray-500 text-center py-8">No teams yet.</p>}
-                         </div>
-                     )}
-                     {activeSettingsTab === 'import' && (
-                         <div className="space-y-6">
-                             <div>
-                                 <label className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2 block">Google Sheet Link</label>
-                                 <input type="text" placeholder="https://docs.google.com/spreadsheets/d/..." value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none focus:border-blue-500/50"/>
-                             </div>
-                             <button onClick={handleFetchFromSheet} className="bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2 transition-all">{isFetchingSheet ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Fetch Data</button>
-                             
-                             {fetchedPreview.length > 0 && (
-                                 <div className="bg-green-500/10 border border-green-500/20 p-6 rounded-2xl">
-                                     <div className="flex items-center gap-3 text-green-400 mb-4 font-bold">
-                                         <CheckCircle size={20}/>
-                                         Found {fetchedPreview.length} players
-                                     </div>
-                                     <button onClick={confirmImport} className="w-full bg-green-600 hover:bg-green-500 py-4 rounded-xl font-bold text-white transition-all shadow-lg">Confirm Import</button>
-                                 </div>
-                             )}
-                         </div>
-                     )}
-                 </div>
-             </GlassCard>
-         </div>
-      )}
-    </div>
-    </BackgroundWrapper>
-  );
+  return null;
 }

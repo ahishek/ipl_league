@@ -25,9 +25,23 @@ export interface Team {
   budget: number;
   roster: Player[];
   color: string;
-  // Metadata for the user controlling this team
+  logoUrl?: string;
   controlledByUserId?: string; 
   avatarUrl?: string; 
+}
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  createdAt: number;
+  avatarSeed: string;
+}
+
+export interface AuctionArchive {
+  roomId: string;
+  roomName: string;
+  completedAt: number;
+  myTeam: Team; // Snapshot of the user's team in that specific auction
 }
 
 export interface AuctionConfig {
@@ -35,6 +49,7 @@ export interface AuctionConfig {
   maxPlayers: number;
   bidTimerSeconds: number;
   minBidIncrement: number;
+  scheduledStartTime?: number;
 }
 
 export interface Bid {
@@ -49,8 +64,6 @@ export interface LogEntry {
   type: 'BID' | 'SOLD' | 'UNSOLD' | 'SYSTEM' | 'AI';
   timestamp: Date;
 }
-
-// --- Multiplayer Types ---
 
 export interface UserState {
   id: string;
@@ -70,7 +83,7 @@ export interface GameState {
 }
 
 export interface Room {
-  id: string; // The join code (also Peer ID suffix)
+  id: string;
   hostId: string;
   name: string;
   createdAt: number;
@@ -79,10 +92,9 @@ export interface Room {
   teams: Team[];
   players: Player[];
   gameState: GameState;
-  members: { userId: string; name: string; isAdmin: boolean }[]; // Who is in the room
+  members: { userId: string; name: string; isAdmin: boolean }[];
 }
 
-// --- P2P Actions ---
 export type Action = 
   | { type: 'SYNC'; payload: Room }
   | { type: 'JOIN'; payload: { userId: string; name: string } }
@@ -93,9 +105,9 @@ export type Action =
   | { type: 'START_GAME'; payload: {} }
   | { type: 'END_GAME'; payload: {} }
   | { type: 'BID'; payload: { teamId: string; amount: number } }
-  | { type: 'SOLD'; payload: { commentary?: string } } // Host decides sold
-  | { type: 'UNSOLD'; payload: { commentary?: string } } // Host decides unsold
+  | { type: 'SOLD'; payload: { commentary?: string } }
+  | { type: 'UNSOLD'; payload: { commentary?: string } }
   | { type: 'NEXT_PLAYER'; payload: {} }
   | { type: 'TOGGLE_PAUSE'; payload: {} }
-  | { type: 'UPDATE_TIMER'; payload: { timer: number } } // Frequent updates
+  | { type: 'UPDATE_TIMER'; payload: { timer: number } }
   | { type: 'IMPORT_PLAYERS'; payload: Player[] };

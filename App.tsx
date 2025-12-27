@@ -5,7 +5,7 @@ import {
   CheckCircle, XCircle, Download, Copy, LogOut, ArrowRight, Loader2, AlertCircle, 
   Clock, Search, Sparkles, List, Star, Palette, FileText, Calendar, 
   Image as ImageIcon, Zap, History, Filter, StopCircle, UserCheck, UserMinus, 
-  TrendingUp, ChevronLeft, RefreshCcw, Edit3
+  TrendingUp, ChevronLeft, RefreshCcw, Edit3, AlertTriangle
 } from 'lucide-react';
 import { Player, Team, Room, UserState, Pot, Position, UserProfile, AuctionArchive } from './types';
 import { TEAM_COLORS } from './constants';
@@ -212,21 +212,6 @@ export default function App() {
        return unsub;
     }
   }, [currentUser]);
-
-  // Timer Logic
-  useEffect(() => {
-    if (!isHost) return;
-    const interval = setInterval(() => {
-        const r = roomService.currentRoom;
-        if (r && r.status === 'ACTIVE' && !r.gameState.isPaused && r.gameState.timer > 0 && r.gameState.currentPlayerId) {
-             roomService.dispatch({ type: 'UPDATE_TIMER', payload: { timer: Number(r.gameState.timer) - 1 } });
-        } 
-        else if (r && r.status === 'ACTIVE' && r.gameState.timer === 0 && r.gameState.currentPlayerId && !r.gameState.isPaused) {
-             if (r.gameState.currentBid) handleSold(); else handleUnsold();
-        }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isHost]);
 
   // Handlers
   const handleLogin = () => {
@@ -498,7 +483,21 @@ export default function App() {
                   </header>
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
                       <div className="lg:col-span-4 space-y-8"><h2 className="text-xl font-bold flex items-center gap-3 text-green-500"><Play size={20}/> Operations</h2><GlassCard className="p-8 space-y-4"><h3 className="text-lg font-bold">Host Room</h3><input type="text" placeholder="Season Name..." className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-sm" value={hostRoomName} onChange={e => setHostRoomName(e.target.value)} /><button onClick={handleCreateRoom} className="w-full bg-blue-600 py-4 rounded-xl font-bold">Launch Hall</button></GlassCard><GlassCard className="p-8 space-y-4"><h3 className="text-lg font-bold">Join Room</h3><input type="text" placeholder="Invite Code..." className="w-full bg-black/40 border border-white/10 rounded-xl p-4 uppercase font-mono tracking-widest text-center" value={joinRoomCode} onChange={e => setJoinRoomCode(e.target.value.toUpperCase())} maxLength={6} /><button onClick={handleJoinRoom} className="w-full bg-green-600 py-4 rounded-xl font-bold">Connect</button></GlassCard></div>
-                      <div className="lg:col-span-8 space-y-8"><h2 className="text-xl font-bold flex items-center gap-3 text-yellow-500"><History size={20}/> Auction Archive</h2>{archive.length === 0 ? <GlassCard className="p-20 text-center opacity-40 italic">No historical records yet.</GlassCard> : <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{archive.map((item) => (<GlassCard key={item.roomId} className="p-6 group cursor-pointer hover:border-blue-500/50 hover:scale-[1.02]" onClick={() => { setSelectedArchive(item); setView('ARCHIVE_DETAIL'); }}><div className="flex justify-between items-start mb-6"><div className="w-16 h-16 rounded-2xl bg-black border border-white/10 overflow-hidden flex items-center justify-center p-2 shadow-lg" style={{ borderColor: item.myTeam.color }}>{item.myTeam.logoUrl ? <img src={item.myTeam.logoUrl} className="w-full h-full object-contain" /> : <div className="text-white font-bold">{item.myTeam.name[0]}</div>}</div><div className="text-right"><span className="text-[10px] text-gray-500 font-bold uppercase">{new Date(item.completedAt).toLocaleDateString()}</span><div className="flex items-center gap-2 text-blue-400 mt-1 font-bold text-xs">Review Squad <ChevronLeft className="rotate-180" size={14}/></div></div></div><h4 className="text-2xl font-bold mb-1 truncate">{item.myTeam.name}</h4><p className="text-xs text-gray-500 uppercase tracking-wider">{item.roomName}</p></GlassCard>))}</div>}</div>
+                      <div className="lg:col-span-8 space-y-8"><h2 className="text-xl font-bold flex items-center gap-3 text-yellow-500"><History size={20}/> Auction Archive</h2>{archive.length === 0 ? <GlassCard className="p-20 text-center opacity-40 italic">No historical records yet.</GlassCard> : <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{archive.map((item) => {
+                          // Handle backward compatibility or display first team logo/name
+                          const displayTeam = item.teams?.[0] || (item as any).myTeam;
+                          return (
+                          <GlassCard key={item.roomId} className="p-6 group cursor-pointer hover:border-blue-500/50 hover:scale-[1.02]" onClick={() => { setSelectedArchive(item); setView('ARCHIVE_DETAIL'); }}>
+                            <div className="flex justify-between items-start mb-6">
+                                <div className="w-16 h-16 rounded-2xl bg-black border border-white/10 overflow-hidden flex items-center justify-center p-2 shadow-lg" style={{ borderColor: displayTeam?.color || '#333' }}>
+                                    {displayTeam?.logoUrl ? <img src={displayTeam.logoUrl} className="w-full h-full object-contain" /> : <div className="text-white font-bold">{displayTeam?.name?.[0] || "A"}</div>}
+                                </div>
+                                <div className="text-right"><span className="text-[10px] text-gray-500 font-bold uppercase">{new Date(item.completedAt).toLocaleDateString()}</span><div className="flex items-center gap-2 text-blue-400 mt-1 font-bold text-xs">Full Replay <ChevronLeft className="rotate-180" size={14}/></div></div>
+                            </div>
+                            <h4 className="text-2xl font-bold mb-1 truncate">{item.roomName}</h4>
+                            <p className="text-xs text-gray-500 uppercase tracking-wider">{item.teams?.length || 1} Teams Participating</p>
+                          </GlassCard>
+                      )})}</div>}</div>
                   </div>
               </div>
           </BackgroundWrapper>
@@ -506,9 +505,68 @@ export default function App() {
   }
 
   if (view === 'ARCHIVE_DETAIL' && selectedArchive) {
-      const t = selectedArchive.myTeam;
+      // Handle backward compatibility where old archives might only have 'myTeam'
+      const teamsToDisplay = selectedArchive.teams || ((selectedArchive as any).myTeam ? [(selectedArchive as any).myTeam] : []);
+      
       return (
-          <BackgroundWrapper><div className="max-w-5xl mx-auto p-8 lg:p-16 w-full h-full overflow-y-auto"><button onClick={() => setView('HOME')} className="mb-10 text-gray-500 hover:text-white flex items-center gap-2 font-bold uppercase text-xs transition-colors"><ChevronLeft size={16}/> Back to Dashboard</button><GlassCard className="p-10 lg:p-16 relative overflow-hidden"><div className="flex flex-col md:flex-row items-center gap-10 mb-12 border-b border-white/5 pb-12"><div className="w-40 h-40 rounded-[2.5rem] bg-black border-4 border-white/10 shadow-2xl flex items-center justify-center p-6" style={{ borderColor: t.color }}>{t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <Trophy size={60} className="text-gray-800"/>}</div><div className="text-center md:text-left"><h1 className="text-5xl font-display font-bold text-white mb-2">{t.name}</h1><p className="text-xl text-gray-400 mb-6 font-light">History from <span className="text-blue-400 font-bold">{selectedArchive.roomName}</span></p></div></div><div className="space-y-4">{t.roster.map((p, idx) => (<div key={idx} className="flex items-center justify-between p-5 bg-white/5 rounded-2xl border border-white/5"><div className="flex items-center gap-5"><div className="w-12 h-12 rounded-full overflow-hidden border border-white/10">{p.imageUrl ? <img src={p.imageUrl} className="w-full h-full object-cover" /> : <User className="p-3 text-gray-600"/>}</div><div><p className="font-bold text-lg">{p.name}</p><p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{p.position}</p></div></div><div className="text-right"><p className="text-lg font-bold text-yellow-500">{p.soldPrice} L</p></div></div>))}</div></GlassCard></div></BackgroundWrapper>
+          <BackgroundWrapper>
+            <div className="max-w-7xl mx-auto p-8 lg:p-12 w-full h-full overflow-y-auto">
+                <button onClick={() => setView('HOME')} className="mb-10 text-gray-500 hover:text-white flex items-center gap-2 font-bold uppercase text-xs transition-colors"><ChevronLeft size={16}/> Back to Dashboard</button>
+                <div className="flex flex-col items-center mb-10 text-center shrink-0">
+                    <Trophy size={60} className="text-yellow-500 mb-4" fill="currentColor"/>
+                    <h1 className="text-4xl font-display font-bold text-white mb-2 uppercase tracking-tight">{selectedArchive.roomName}</h1>
+                    <p className="text-gray-500 text-sm font-medium uppercase tracking-widest">Auction Completed on {new Date(selectedArchive.completedAt).toLocaleDateString()}</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 w-full">
+                    {teamsToDisplay.map(t => {
+                         const roleCounts = t.roster.reduce((acc, p) => {
+                            acc[p.position] = (acc[p.position] || 0) + 1;
+                            return acc;
+                        }, {} as Record<string, number>);
+                        
+                        return (
+                            <GlassCard key={t.id} className="p-8 flex flex-col h-full border-white/10 hover:border-blue-500/30">
+                                <div className="flex items-center gap-5 mb-6 border-b border-white/5 pb-6">
+                                    <div className="w-20 h-20 rounded-2xl bg-black border-4 flex items-center justify-center p-3 shadow-2xl shrink-0" style={{ borderColor: t.color }}>{t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <div className="text-2xl font-bold">{t.name[0]}</div>}</div>
+                                    <div className="overflow-hidden"><h3 className="text-2xl font-bold text-white truncate">{t.name}</h3><p className="text-gray-500 text-xs font-bold uppercase tracking-widest truncate">{t.ownerName}</p></div>
+                                </div>
+                                
+                                <div className="grid grid-cols-4 gap-2 mb-6">
+                                    {['Batter', 'Bowler', 'All Rounder', 'Wicket Keeper'].map(role => (
+                                        <div key={role} className="bg-black/40 rounded-lg p-2 text-center border border-white/5">
+                                            <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider mb-1">{role === 'Wicket Keeper' ? 'WK' : role === 'All Rounder' ? 'AR' : role}</div>
+                                            <div className="text-lg font-bold text-white leading-none">{roleCounts[role as Position] || 0}</div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="flex-1 space-y-3 mb-8 overflow-y-auto custom-scrollbar max-h-[300px] pr-2">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-4">Acquired Squad ({t.roster.length})</p>
+                                    {t.roster.length === 0 ? <p className="text-xs italic text-gray-700 py-4">No acquisitions.</p> : (
+                                        <div className="space-y-2">
+                                            {t.roster.map(p => (
+                                                <div key={p.id} className="flex justify-between items-center text-[11px] bg-white/5 p-3 rounded-xl border border-white/5 group hover:bg-white/10 transition-colors">
+                                                    <div className="flex flex-col min-w-0 pr-2">
+                                                        <span className="font-bold text-white truncate">{p.name}</span>
+                                                        <span className="text-[9px] text-gray-500 uppercase tracking-wider">{p.position}</span>
+                                                    </div>
+                                                    <span className="font-mono text-yellow-500 font-bold whitespace-nowrap">{p.soldPrice} L</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="mt-auto border-t border-white/10 pt-6 flex justify-between items-end">
+                                    <div><span className="text-[9px] text-gray-500 font-bold uppercase block mb-1">Total Spent</span><span className="text-xl font-display font-bold text-red-500">{t.roster.reduce((sum, p) => sum + (p.soldPrice || 0), 0)} L</span></div>
+                                    <div className="text-right"><span className="text-[9px] text-gray-500 font-bold uppercase block mb-1">Purse Left</span><span className="text-xl font-display font-bold text-green-500">{t.budget} L</span></div>
+                                </div>
+                            </GlassCard>
+                        );
+                    })}
+                </div>
+            </div>
+          </BackgroundWrapper>
       );
   }
 
@@ -571,7 +629,7 @@ export default function App() {
                                 <button onClick={togglePause} className="p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all">
                                     {room.gameState.isPaused ? <Play size={18} /> : <Pause size={18} />}
                                 </button>
-                                <button onClick={() => setShowEndConfirm(true)} className="p-3 bg-red-600/10 hover:bg-red-600/20 text-red-500 rounded-xl transition-all">
+                                <button onClick={(e) => { e.stopPropagation(); setShowEndConfirm(true); }} className="p-3 bg-red-600/10 hover:bg-red-600/20 text-red-500 rounded-xl transition-all">
                                     <StopCircle size={18} />
                                 </button>
                             </div>
@@ -676,7 +734,6 @@ export default function App() {
                                 
                                 <div className="lg:col-span-7 flex flex-col gap-6 overflow-hidden justify-center">
                                     <GlassCard className="flex-1 flex flex-col items-center justify-center p-6 relative shadow-2xl overflow-hidden max-h-[380px]">
-                                        <div className="text-center mb-4"><span className={`text-[72px] font-display font-bold leading-none tracking-tighter ${room.gameState.timer <= 5 ? 'text-red-500 animate-pulse' : 'text-white'}`}>{room.gameState.timer}</span></div>
                                         <div className="w-full max-w-sm bg-black/40 rounded-3xl p-5 border border-white/10 shadow-inner">
                                             <p className="text-[8px] text-gray-500 font-bold uppercase tracking-[0.3em] mb-3 text-center">Top Contender</p>
                                             {room.gameState.currentBid ? (
@@ -730,8 +787,18 @@ export default function App() {
                             const nextBid10 = Math.max(baseAmt, currentAmt + 10);
                             const nextBid20 = Math.max(baseAmt + 10, currentAmt + 20);
                             
+                            const isSquadFull = t.roster.length >= room.config.maxPlayers;
+                            const slotsLeft = room.config.maxPlayers - t.roster.length;
+                            // Warning if avg budget per remaining slot is less than 25L (tight budget)
+                            const isLowBudget = slotsLeft > 0 && (t.budget < slotsLeft * 25);
+
                             return (
-                                <div key={t.id} onClick={() => setViewTeamRoster(t)} className={`shrink-0 w-72 p-4 rounded-2xl border transition-all duration-300 cursor-pointer ${isWinning ? 'bg-green-500/10 border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.1)]' : 'bg-white/5 border-white/10 hover:border-white/20'} ${isMyTeam ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-black' : ''}`}>
+                                <div key={t.id} onClick={() => setViewTeamRoster(t)} className={`shrink-0 w-72 p-4 rounded-2xl border transition-all duration-300 cursor-pointer ${isWinning ? 'bg-green-500/10 border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.1)]' : 'bg-white/5 border-white/10 hover:border-white/20'} ${isMyTeam ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-black' : ''} relative`}>
+                                    {isMyTeam && isLowBudget && (
+                                        <div className="absolute top-2 right-2 text-yellow-500 bg-yellow-500/10 p-1.5 rounded-lg border border-yellow-500/30 animate-pulse" title="Low Budget Warning: You might run out of funds to fill your squad!">
+                                            <AlertTriangle size={14} />
+                                        </div>
+                                    )}
                                     <div className="flex items-center gap-3 mb-4">
                                         <div className="w-10 h-10 rounded-xl bg-black border-2 flex items-center justify-center p-1 shadow-inner overflow-hidden shrink-0" style={{ borderColor: t.color }}>
                                             {t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <div className="text-xs font-bold">{t.name[0]}</div>}
@@ -739,16 +806,20 @@ export default function App() {
                                         <div className="flex-1 overflow-hidden">
                                             <p className="text-[11px] font-bold text-white truncate uppercase tracking-tight">{t.name}</p>
                                             <div className="flex justify-between items-center">
-                                                <span className="text-[9px] text-yellow-500 font-mono font-bold">{t.budget} L LEFT</span>
-                                                <span className="text-[8px] bg-blue-500/20 px-1.5 rounded text-blue-400 font-bold uppercase tracking-widest">{t.roster.length} SQUAD</span>
+                                                <span className={`text-[9px] font-mono font-bold ${isLowBudget ? 'text-red-400' : 'text-yellow-500'}`}>{t.budget} L LEFT</span>
+                                                <span className={`text-[8px] px-1.5 rounded font-bold uppercase tracking-widest ${isSquadFull ? 'bg-green-500/20 text-green-400' : 'bg-blue-500/20 text-blue-400'}`}>{t.roster.length}/{room.config.maxPlayers} SQUAD</span>
                                             </div>
                                         </div>
                                     </div>
                                     {isMyTeam && room.gameState.currentPlayerId && !room.gameState.isPaused && !isWinning ? (
-                                        <div className="grid grid-cols-2 gap-2 animate-fade-in" onClick={e => e.stopPropagation()}>
-                                          <button onClick={() => placeBid(t.id, nextBid10)} disabled={t.budget < nextBid10} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-50 active:scale-95 transition-all">+{nextBid10 - currentAmt}L (Bid {nextBid10}L)</button>
-                                          <button onClick={() => placeBid(t.id, nextBid20)} disabled={t.budget < nextBid20} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-50 active:scale-95 transition-all">+{nextBid20 - currentAmt}L (Bid {nextBid20}L)</button>
-                                        </div>
+                                        isSquadFull ? (
+                                            <div className="w-full bg-red-500/10 py-2.5 rounded-xl text-[10px] font-bold text-red-500 text-center uppercase tracking-widest border border-red-500/20">Squad Limit Reached</div>
+                                        ) : (
+                                            <div className="grid grid-cols-2 gap-2 animate-fade-in" onClick={e => e.stopPropagation()}>
+                                              <button onClick={() => placeBid(t.id, nextBid10)} disabled={t.budget < nextBid10} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-50 active:scale-95 transition-all">+{nextBid10 - currentAmt}L (Bid {nextBid10}L)</button>
+                                              <button onClick={() => placeBid(t.id, nextBid20)} disabled={t.budget < nextBid20} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-50 active:scale-95 transition-all">+{nextBid20 - currentAmt}L (Bid {nextBid20}L)</button>
+                                            </div>
+                                        )
                                     ) : isWinning ? (
                                         <div className="w-full bg-green-500 py-2.5 rounded-xl text-[10px] font-bold text-black text-center animate-pulse uppercase tracking-widest shadow-lg">Leading Bid</div>
                                     ) : (
@@ -818,65 +889,6 @@ export default function App() {
             </div>
         )}
 
-        {view === 'COMPLETED' && (
-            <div className="flex-1 flex flex-col items-center p-8 animate-fade-in w-full overflow-y-auto custom-scrollbar">
-                <div className="flex flex-col items-center mb-10 text-center shrink-0">
-                    <Trophy size={80} className="text-yellow-500 mb-6 animate-bounce" fill="currentColor"/>
-                    <h1 className="text-5xl font-display font-bold text-white mb-2 uppercase tracking-tight">Auction Closed</h1>
-                    <p className="text-gray-500 text-lg max-w-2xl font-medium">Final squad rosters from the session below.</p>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 w-full max-w-7xl mb-16 px-4">
-                    {room?.teams.map(t => {
-                        const roleCounts = t.roster.reduce((acc, p) => {
-                            acc[p.position] = (acc[p.position] || 0) + 1;
-                            return acc;
-                        }, {} as Record<string, number>);
-
-                        return (
-                        <GlassCard key={t.id} className="p-8 flex flex-col h-full border-white/10 hover:border-blue-500/30">
-                            <div className="flex items-center gap-5 mb-6 border-b border-white/5 pb-6">
-                                <div className="w-20 h-20 rounded-2xl bg-black border-4 flex items-center justify-center p-3 shadow-2xl shrink-0" style={{ borderColor: t.color }}>{t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <div className="text-2xl font-bold">{t.name[0]}</div>}</div>
-                                <div className="overflow-hidden"><h3 className="text-2xl font-bold text-white truncate">{t.name}</h3><p className="text-gray-500 text-xs font-bold uppercase tracking-widest truncate">{t.ownerName}</p></div>
-                            </div>
-
-                            <div className="grid grid-cols-4 gap-2 mb-6">
-                                {['Batter', 'Bowler', 'All Rounder', 'Wicket Keeper'].map(role => (
-                                    <div key={role} className="bg-black/40 rounded-lg p-2 text-center border border-white/5">
-                                        <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider mb-1">{role === 'Wicket Keeper' ? 'WK' : role === 'All Rounder' ? 'AR' : role}</div>
-                                        <div className="text-lg font-bold text-white leading-none">{roleCounts[role as Position] || 0}</div>
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div className="flex-1 space-y-3 mb-8 overflow-y-auto custom-scrollbar max-h-[300px] pr-2">
-                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-4">Acquired Squad ({t.roster.length})</p>
-                                {t.roster.length === 0 ? <p className="text-xs italic text-gray-700 py-4">No acquisitions today.</p> : (
-                                    <div className="space-y-2">
-                                        {t.roster.map(p => (
-                                            <div key={p.id} className="flex justify-between items-center text-[11px] bg-white/5 p-3 rounded-xl border border-white/5 group hover:bg-white/10 transition-colors">
-                                                <div className="flex flex-col min-w-0 pr-2">
-                                                     <span className="font-bold text-white truncate">{p.name}</span>
-                                                     <span className="text-[9px] text-gray-500 uppercase tracking-wider">{p.position}</span>
-                                                </div>
-                                                <span className="font-mono text-yellow-500 font-bold whitespace-nowrap">{p.soldPrice} L</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                            <div className="mt-auto border-t border-white/10 pt-6 flex justify-between items-end">
-                                <div><span className="text-[9px] text-gray-500 font-bold uppercase block mb-1">Total Spent</span><span className="text-xl font-display font-bold text-red-500">{t.roster.reduce((sum, p) => sum + (p.soldPrice || 0), 0)} L</span></div>
-                                <div className="text-right"><span className="text-[9px] text-gray-500 font-bold uppercase block mb-1">Purse Left</span><span className="text-xl font-display font-bold text-green-500">{t.budget} L</span></div>
-                            </div>
-                        </GlassCard>
-                    )})}
-                </div>
-                
-                <button onClick={() => setView('HOME')} className="bg-white text-black px-12 py-5 rounded-3xl font-bold shadow-2xl hover:bg-gray-200 transition-all flex items-center gap-3 active:scale-95 mb-10 shrink-0"><History size={20}/> RETURN TO DASHBOARD</button>
-            </div>
-        )}
-
         {showEndConfirm && (
            <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-6">
               <GlassCard className="max-w-md w-full p-10 text-center space-y-8 animate-fade-in border-red-500/30 bg-[#0a0a0a]">
@@ -902,7 +914,6 @@ export default function App() {
            {activeSettingsTab === 'config' && (<div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                <div className="bg-white/5 p-6 rounded-2xl border border-white/5"><label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Total Squad Budget (L)</label><input type="number" value={room?.config.totalBudget} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
                <div className="bg-white/5 p-6 rounded-2xl border border-white/5"><label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Base Bid Step (L)</label><input type="number" value={room?.config.minBidIncrement} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {minBidIncrement: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
-               <div className="bg-white/5 p-6 rounded-2xl border border-white/5"><label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Bid Timer (Seconds)</label><input type="number" value={room?.config.bidTimerSeconds} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {bidTimerSeconds: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none" placeholder="30"/></div>
            </div>)}
            {activeSettingsTab === 'schedule' && (
              <div className="bg-white/5 p-8 rounded-2xl border border-white/5">

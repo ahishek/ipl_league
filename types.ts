@@ -41,7 +41,7 @@ export interface AuctionArchive {
   roomId: string;
   roomName: string;
   completedAt: number;
-  myTeam: Team; // Snapshot of the user's team in that specific auction
+  teams: Team[]; // Storing all teams state at the end of auction
 }
 
 export interface AuctionConfig {

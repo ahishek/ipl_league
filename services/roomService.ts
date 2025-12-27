@@ -209,7 +209,10 @@ class RoomService {
                 const team = room.teams.find(t => t.id === teamId);
                 const currentAmt = room.gameState.currentBid?.amount || 0;
                 const player = room.players.find(p => p.id === room.gameState.currentPlayerId);
-                if (team && player && amount > currentAmt && amount >= player.basePrice && team.budget >= amount) {
+                // Check if team has space in roster (maxPlayers limit)
+                const hasSpace = team && team.roster.length < room.config.maxPlayers;
+                
+                if (hasSpace && team && player && amount > currentAmt && amount >= player.basePrice && team.budget >= amount) {
                     room.gameState.currentBid = { teamId, amount, timestamp: Date.now() };
                     room.gameState.timer = room.config.bidTimerSeconds;
                     logs.unshift({ id: Date.now().toString(), message: `${team.name} bid ${amount} L`, type: 'BID', timestamp: new Date() });
@@ -279,12 +282,13 @@ class RoomService {
 
     private archiveRoom(room: Room) {
         if (!this.currentUser) return;
-        const myTeam = room.teams.find(t => t.controlledByUserId === this.currentUser!.id);
-        if (!myTeam) return;
-
+        // Logic to allow archive even if not participating (for host) or participating
+        // Assuming we always want to archive if the room is completed and we are connected
+        
         const archive: AuctionArchive[] = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
         if (!archive.find(a => a.roomId === room.id)) {
-            archive.unshift({ roomId: room.id, roomName: room.name, completedAt: Date.now(), myTeam: myTeam });
+            // Save all teams, not just myTeam, to allow detailed review later
+            archive.unshift({ roomId: room.id, roomName: room.name, completedAt: Date.now(), teams: room.teams });
             localStorage.setItem(HISTORY_KEY, JSON.stringify(archive));
         }
     }

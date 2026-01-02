@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Play, Pause, SkipForward, Settings, Gavel, Users, Activity, Trophy, User, Plus,
@@ -831,6 +830,72 @@ export default function App() {
                     </div>
                 </div>
             </div>
+        )}
+
+        {view === 'COMPLETED' && room && (
+          <div className="max-w-7xl mx-auto p-12 animate-fade-in w-full h-full overflow-y-auto">
+             <div className="flex flex-col items-center mb-12 text-center">
+                 <div className="w-20 h-20 bg-yellow-500/10 rounded-full flex items-center justify-center mb-6 border border-yellow-500/20 shadow-[0_0_30px_rgba(234,179,8,0.2)]">
+                    <Trophy size={40} className="text-yellow-500" fill="currentColor"/>
+                 </div>
+                 <h2 className="text-5xl font-display font-bold text-white mb-4">Auction Concluded</h2>
+                 <p className="text-gray-400 text-lg max-w-2xl">The hammer has fallen for the final time. All rosters are locked and finances settled.</p>
+                 <button onClick={() => setView('HOME')} className="mt-8 bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-bold shadow-xl transition-all flex items-center gap-2 text-sm uppercase tracking-widest">
+                    <ArrowRight size={18} /> Return to Dashboard
+                 </button>
+             </div>
+             
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 pb-12">
+                {room.teams.sort((a,b) => b.roster.length - a.roster.length).map(t => {
+                   const roleCounts = t.roster.reduce((acc, p) => {
+                      acc[p.position] = (acc[p.position] || 0) + 1;
+                      return acc;
+                  }, {} as Record<string, number>);
+
+                   return (
+                      <GlassCard key={t.id} className="p-6 flex flex-col h-full border-white/10 hover:border-white/20 transition-all">
+                          <div className="flex items-center gap-5 mb-6 border-b border-white/5 pb-6">
+                              <div className="w-16 h-16 rounded-2xl bg-black border-2 flex items-center justify-center p-2 shadow-lg shrink-0" style={{ borderColor: t.color }}>
+                                  {t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <div className="text-xl font-bold text-white">{t.name[0]}</div>}
+                              </div>
+                              <div className="overflow-hidden">
+                                  <h3 className="text-xl font-bold text-white truncate">{t.name}</h3>
+                                  <p className="text-xs text-gray-500 font-bold uppercase tracking-widest truncate">{t.ownerName}</p>
+                              </div>
+                          </div>
+
+                          <div className="grid grid-cols-4 gap-2 mb-6">
+                              {['Batter', 'Bowler', 'All Rounder', 'Wicket Keeper'].map(role => (
+                                  <div key={role} className="bg-black/40 rounded-lg p-2 text-center border border-white/5">
+                                      <div className="text-[8px] text-gray-500 uppercase font-bold tracking-wider mb-1">{role === 'Wicket Keeper' ? 'WK' : role === 'All Rounder' ? 'AR' : role}</div>
+                                      <div className="text-base font-bold text-white leading-none">{roleCounts[role as any] || 0}</div>
+                                  </div>
+                              ))}
+                          </div>
+
+                          <div className="flex-1 space-y-2 mb-6 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+                              {t.roster.length === 0 ? <p className="text-xs italic text-gray-700 text-center py-4">No players signed.</p> : (
+                                  t.roster.map(p => (
+                                      <div key={p.id} className="flex justify-between items-center text-[10px] bg-white/5 p-2.5 rounded-xl border border-white/5">
+                                          <div>
+                                              <span className="font-bold text-white block">{p.name}</span>
+                                              <span className="text-[8px] text-gray-500 uppercase tracking-wider">{p.position}</span>
+                                          </div>
+                                          <span className="font-mono text-yellow-500 font-bold">{p.soldPrice}L</span>
+                                      </div>
+                                  ))
+                              )}
+                          </div>
+
+                          <div className="mt-auto border-t border-white/10 pt-4 flex justify-between items-end">
+                              <div><span className="text-[8px] text-gray-500 font-bold uppercase block mb-1">Spent</span><span className="text-lg font-display font-bold text-red-500">{t.roster.reduce((sum, p) => sum + (p.soldPrice || 0), 0)} L</span></div>
+                              <div className="text-right"><span className="text-[8px] text-gray-500 font-bold uppercase block mb-1">Balance</span><span className="text-lg font-display font-bold text-green-500">{t.budget} L</span></div>
+                          </div>
+                      </GlassCard>
+                   )
+                })}
+             </div>
+          </div>
         )}
 
         {viewTeamRoster && (

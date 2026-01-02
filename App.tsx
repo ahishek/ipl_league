@@ -1040,9 +1040,22 @@ export default function App() {
                     {viewPlayerPool && (
                         <div className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-md flex items-center justify-center p-6" onClick={() => setViewPlayerPool(false)}>
                             <GlassCard className="max-w-2xl w-full max-h-[80vh] flex flex-col bg-[#0a0a0a] border-white/10" onClick={e => e.stopPropagation()}>
-                                <div className="p-6 border-b border-white/10 flex justify-between items-center">
-                                     <h3 className="font-bold text-white text-lg">Player Pool ({room?.players.length})</h3>
-                                     <button onClick={() => setViewPlayerPool(false)} className="text-gray-400 hover:text-white"><XCircle size={24}/></button>
+                                <div className="p-6 border-b border-white/10 flex items-center gap-4 shrink-0">
+                                     <button onClick={() => setViewPlayerPool(false)} className="p-2 -ml-2 hover:bg-white/5 rounded-full text-gray-400 hover:text-white transition-colors">
+                                        <ChevronLeft size={24} />
+                                     </button>
+                                     <h3 className="font-bold text-white text-lg flex-1">Player Pool ({room?.players.length})</h3>
+                                     <button 
+                                        onClick={() => {
+                                            setViewPlayerPool(false);
+                                            setShowStartConfirm(false);
+                                            setShowSettings(true);
+                                            setActiveSettingsTab('import');
+                                        }} 
+                                        className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-all border border-white/5"
+                                     >
+                                        <Edit3 size={14}/> Edit List
+                                     </button>
                                 </div>
                                 <div className="flex-1 overflow-y-auto p-0">
                                    <table className="w-full text-left text-xs">

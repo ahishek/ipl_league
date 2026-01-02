@@ -4,7 +4,7 @@ import {
   CheckCircle, XCircle, Download, Copy, LogOut, ArrowRight, Loader2, AlertCircle, 
   Clock, Search, Sparkles, List, Star, Palette, FileText, Calendar, 
   Image as ImageIcon, Zap, History, Filter, StopCircle, UserCheck, UserMinus, 
-  TrendingUp, ChevronLeft, RefreshCcw, Edit3, AlertTriangle
+  TrendingUp, ChevronLeft, RefreshCcw, Edit3, AlertTriangle, Coins, Eye
 } from 'lucide-react';
 import { Player, Team, Room, UserState, Pot, Position, UserProfile, AuctionArchive } from './types';
 import { TEAM_COLORS } from './constants';
@@ -156,6 +156,8 @@ export default function App() {
   const [tempNoteValue, setTempNoteValue] = useState("");
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [showStartConfirm, setShowStartConfirm] = useState(false);
+  const [viewPlayerPool, setViewPlayerPool] = useState(false);
 
   // --- Import Specific State ---
   const [sheetUrl, setSheetUrl] = useState("");
@@ -321,9 +323,15 @@ export default function App() {
   };
 
   const handleStartGame = () => {
+      // Instead of dispatching directly, show confirmation modal
+      setShowStartConfirm(true);
+  };
+
+  const confirmStartGame = () => {
       roomService.dispatch({ type: 'START_GAME', payload: {} });
       setTimeout(() => roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} }), 500);
-  };
+      setShowStartConfirm(false);
+  }
 
   const handleEndGame = () => {
       roomService.dispatch({ type: 'END_GAME', payload: {} });
@@ -673,19 +681,26 @@ export default function App() {
                             </div>
                         ) : (
                              <div className="space-y-3">
-                                 {room.gameState.logs.map(log => (
-                                     <div key={log.id} className="p-3 bg-white/5 rounded-2xl border border-white/5 hover:bg-white/10 transition-colors flex flex-col gap-1 w-full box-border">
-                                         <div className="flex items-start gap-2 w-full">
+                                 {room.gameState.logs.map(log => {
+                                     const isAI = log.type === 'AI';
+                                     const isSystem = log.type === 'SYSTEM';
+                                     return (
+                                     <div key={log.id} className={`p-3 rounded-2xl border transition-colors flex flex-col gap-1 w-full box-border ${isAI ? 'bg-purple-900/20 border-purple-500/30 shadow-[0_0_15px_rgba(168,85,247,0.1)]' : isSystem ? 'bg-white/10 border-white/10' : 'bg-white/5 border-white/5'}`}>
+                                         <div className="flex items-start gap-3 w-full">
                                             <div className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${
                                                 log.type === 'BID' ? 'bg-blue-500' : 
                                                 log.type === 'SOLD' ? 'bg-green-500' : 
-                                                log.type === 'UNSOLD' ? 'bg-red-500' : 'bg-gray-500'
+                                                log.type === 'UNSOLD' ? 'bg-red-500' : 
+                                                log.type === 'AI' ? 'bg-purple-400' : 'bg-gray-500'
                                             }`} />
-                                            <p className="text-[11px] text-gray-300 leading-snug break-words w-full">{log.message}</p>
+                                            <div className="flex-1">
+                                                {isAI && <span className="text-[8px] font-bold text-purple-400 uppercase tracking-wider mb-0.5 block flex items-center gap-1"><Sparkles size={8}/> Commentary</span>}
+                                                <p className={`leading-snug break-words w-full ${isAI ? 'text-purple-100 italic font-medium text-xs' : 'text-[11px] text-gray-300'}`}>{log.message}</p>
+                                            </div>
                                          </div>
-                                         <span className="text-[9px] text-gray-600 pl-3.5 block">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                         <span className="text-[9px] text-gray-600 pl-4 block">{new Date(log.timestamp).toLocaleTimeString()}</span>
                                      </div>
-                                 ))}
+                                 )})}
                             </div>
                         )}
                     </div>
@@ -759,9 +774,11 @@ export default function App() {
                                         )}
                                     </GlassCard>
                                     {playerInsights ? (
-                                        <GlassCard className="p-4 bg-blue-500/10 border-blue-500/20 shadow-lg shrink-0">
-                                            <h4 className="text-[8px] font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2 mb-1.5"><Sparkles size={10}/> Analytics</h4>
-                                            <p className="text-[10px] italic text-blue-100 leading-relaxed line-clamp-2">"{playerInsights}"</p>
+                                        <GlassCard className="p-4 bg-blue-500/10 border-blue-500/20 shadow-lg shrink-0 flex flex-col gap-2 h-auto max-h-[150px]">
+                                            <h4 className="text-[8px] font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2 mb-1 shrink-0"><Sparkles size={10}/> Analytics</h4>
+                                            <div className="overflow-y-auto custom-scrollbar text-[11px] text-blue-100 leading-relaxed space-y-1">
+                                                {playerInsights.split('\n').map((line, i) => <p key={i}>{line}</p>)}
+                                            </div>
                                         </GlassCard>
                                     ) : (
                                         <button onClick={handleGetInsights} disabled={isInsightsLoading} className="bg-white/5 hover:bg-white/10 py-2.5 rounded-xl text-[9px] font-bold uppercase tracking-widest text-gray-500 border border-white/5 transition-all shadow-inner shrink-0">
@@ -952,6 +969,113 @@ export default function App() {
                     </div>
                 </GlassCard>
             </div>
+        )}
+
+        {showStartConfirm && (
+             <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-6">
+                <GlassCard className="max-w-2xl w-full p-8 flex flex-col bg-[#0a0a0a] border-white/10 shadow-2xl animate-fade-in max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center gap-4 mb-8">
+                        <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center border border-green-500/20"><Play size={24} className="text-green-500" fill="currentColor"/></div>
+                        <div><h2 className="text-2xl font-bold text-white">Initialize Auction</h2><p className="text-gray-400 text-xs">Verify settings before launching the live session.</p></div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                         <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+                             <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2"><Coins size={14}/> Financials</h4>
+                             <div className="space-y-3">
+                                 <div>
+                                     <label className="text-[10px] text-gray-400 block mb-1">Squad Budget (L)</label>
+                                     <input type="number" className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-sm text-white focus:border-green-500/50 focus:outline-none transition-colors" value={room?.config.totalBudget} onChange={(e) => roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} />
+                                 </div>
+                                 <div>
+                                     <label className="text-[10px] text-gray-400 block mb-1">Min Bid Step (L)</label>
+                                     <input type="number" className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-sm text-white focus:border-green-500/50 focus:outline-none transition-colors" value={room?.config.minBidIncrement} onChange={(e) => roomService.dispatch({type:'UPDATE_CONFIG', payload: {minBidIncrement: parseInt(e.target.value)}})} />
+                                 </div>
+                             </div>
+                         </div>
+                         <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+                              <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2"><Users size={14}/> Participation</h4>
+                              <div className="flex justify-between items-center mb-2">
+                                  <span className="text-sm text-gray-300">Registered Teams</span>
+                                  <span className="text-xl font-bold text-white">{room?.teams.length}</span>
+                              </div>
+                              <div className="flex justify-between items-center border-t border-white/5 pt-2">
+                                  <span className="text-sm text-gray-300">Player Pool</span>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-xl font-bold text-white">{room?.players.length}</span>
+                                    <button onClick={() => setViewPlayerPool(true)} className="p-1.5 hover:bg-white/10 rounded-lg text-blue-400 transition-colors" title="View Player List">
+                                        <Eye size={16}/>
+                                    </button>
+                                  </div>
+                              </div>
+                               <div className="flex justify-between items-center border-t border-white/5 pt-2 mt-2">
+                                  <span className="text-sm text-gray-300">Max Squad Size</span>
+                                  <input type="number" className="w-16 bg-black/50 border border-white/10 rounded-lg p-1 text-sm text-white text-right focus:outline-none" value={room?.config.maxPlayers} onChange={(e) => roomService.dispatch({type:'UPDATE_CONFIG', payload: {maxPlayers: parseInt(e.target.value)}})} />
+                              </div>
+                         </div>
+                    </div>
+
+                    <div className="mb-8">
+                        <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Franchise Grid</h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                            {room?.teams.map(t => (
+                                <div key={t.id} className="bg-white/5 p-3 rounded-xl flex items-center gap-3 border border-white/5 hover:bg-white/10 transition-colors">
+                                    <div className="w-8 h-8 rounded-lg bg-black flex items-center justify-center text-xs font-bold shrink-0 shadow-lg" style={{borderColor: t.color, borderWidth: 2}}>
+                                        {t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain"/> : t.name[0]}
+                                    </div>
+                                    <div className="flex flex-col min-w-0">
+                                        <span className="text-xs font-bold text-gray-200 truncate">{t.name}</span>
+                                        <span className="text-[10px] text-gray-500 truncate font-medium">{t.ownerName}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex gap-4 mt-auto pt-6 border-t border-white/10">
+                        <button onClick={() => setShowStartConfirm(false)} className="flex-1 py-4 rounded-xl font-bold text-gray-400 hover:bg-white/5 transition-all uppercase text-xs tracking-widest">Edit Setup</button>
+                        <button onClick={confirmStartGame} className="flex-[2] bg-green-600 hover:bg-green-500 py-4 rounded-xl font-bold text-white shadow-xl transition-all uppercase text-xs tracking-widest flex items-center justify-center gap-2">Confirm & Start Auction <ArrowRight size={14}/></button>
+                    </div>
+
+                    {viewPlayerPool && (
+                        <div className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-md flex items-center justify-center p-6" onClick={() => setViewPlayerPool(false)}>
+                            <GlassCard className="max-w-2xl w-full max-h-[80vh] flex flex-col bg-[#0a0a0a] border-white/10" onClick={e => e.stopPropagation()}>
+                                <div className="p-6 border-b border-white/10 flex justify-between items-center">
+                                     <h3 className="font-bold text-white text-lg">Player Pool ({room?.players.length})</h3>
+                                     <button onClick={() => setViewPlayerPool(false)} className="text-gray-400 hover:text-white"><XCircle size={24}/></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-0">
+                                   <table className="w-full text-left text-xs">
+                                      <thead className="bg-white/5 text-gray-400 sticky top-0 backdrop-blur-md">
+                                         <tr>
+                                            <th className="p-4 font-bold uppercase tracking-wider">Player</th>
+                                            <th className="p-4 font-bold uppercase tracking-wider">Role</th>
+                                            <th className="p-4 font-bold uppercase tracking-wider">Pot</th>
+                                            <th className="p-4 font-bold uppercase tracking-wider text-right">Base Price</th>
+                                         </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-white/5">
+                                         {room?.players.map(p => (
+                                            <tr key={p.id} className="hover:bg-white/5 transition-colors">
+                                               <td className="p-4 font-bold text-white flex items-center gap-3">
+                                                    <div className="w-8 h-8 rounded-full bg-gray-800 overflow-hidden shrink-0">
+                                                       {p.imageUrl ? <img src={p.imageUrl} className="w-full h-full object-cover"/> : <User size={16} className="m-auto mt-2 text-gray-500"/>}
+                                                    </div>
+                                                    {p.name}
+                                               </td>
+                                               <td className="p-4 text-gray-400">{p.position}</td>
+                                               <td className="p-4"><span className="bg-white/10 px-2 py-1 rounded text-[10px] font-bold">{p.pot}</span></td>
+                                               <td className="p-4 font-mono text-blue-400 font-bold text-right">{p.basePrice} L</td>
+                                            </tr>
+                                         ))}
+                                      </tbody>
+                                   </table>
+                                </div>
+                            </GlassCard>
+                        </div>
+                    )}
+                </GlassCard>
+             </div>
         )}
 
         {showEndConfirm && (

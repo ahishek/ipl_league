@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { Player, Team } from '../types';
 
@@ -130,8 +129,11 @@ export const getPlayerInsights = async (player: Player): Promise<string> => {
 
   try {
     const prompt = `
-      Provide a concise, high-impact summary (max 30 words) of ${player.name}'s recent T20 form.
-      Include one "Key Stat" that justifies their auction value. Be direct, analytical, and professional.
+      Analyze ${player.name} (${player.position}) for a T20 auction.
+      Return the response as 2-3 short bullet points (using a dash '-').
+      1. Recent T20 Form.
+      2. One "Key Stat" or Strength.
+      Keep it punchy, analytical, and professional. Max 40 words total.
     `;
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',

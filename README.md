@@ -36,6 +36,32 @@ The experience is enhanced by **Google Gemini AI**, which acts as a virtual bran
 *   **Responsive:** Works on desktop and tablets.
 *   **Audio/Visual Cues:** Animations for bids and sales.
 
+## 📡 Architecture: PeerJS & Real-time Sync
+
+This project leverages **PeerJS** to establish a serverless, Peer-to-Peer (P2P) architecture. Here is how we maintain real-time synchronization across devices without a traditional backend database:
+
+### 1. Host Authority Pattern
+Instead of a central server, the user who clicks **"Host Room"** becomes the authoritative server for that session.
+*   The Host's browser holds the "Source of Truth" (`currentRoom` state).
+*   The Host generates a unique Room ID (e.g., `6X9P2Q`).
+*   Technically, this ID is used to create a PeerJS ID (e.g., `ipl-auction-v6-6X9P2Q`).
+
+### 2. Connection Handshake
+*   **Participants** (Clients) use the Room ID to initiate a WebRTC `DataConnection` to the Host via PeerJS.
+*   We utilize **Google's Public STUN servers** (`stun.l.google.com:19302`) to navigate NATs and Firewalls. This ensures users on mobile networks (4G/5G) can successfully connect with users on WiFi.
+
+### 3. The Sync Loop (Redux-over-P2P)
+We implement a unidirectional data flow similar to Redux, but over the network:
+1.  **Action:** A client performs an action (e.g., `BID 200L`).
+2.  **Dispatch:** The client does *not* update their local state immediately. Instead, they send a JSON `Action` object to the Host.
+3.  **Process:** The Host receives the action, runs it through a central reducer (handling logic, validation, and timers), and updates the canonical state.
+4.  **Broadcast:** The Host broadcasts the entire updated `Room` state object back to **ALL** connected clients via a `SYNC` event.
+5.  **Render:** Clients receive the `SYNC` payload and replace their local state, ensuring everyone sees the exact same data.
+
+### 4. Reliability
+*   **Heartbeats & Config:** connections are configured with `reliable: true` (SCTP) to ensure packet delivery.
+*   **Reconnection:** If a client drops, the state remains safe with the Host. When the client reconnects, they immediately receive the latest `SYNC` snapshot.
+
 ## 🛠️ Tech Stack
 
 *   **Frontend:** React 19, TypeScript

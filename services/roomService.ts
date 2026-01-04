@@ -1,9 +1,9 @@
-
 import Peer, { DataConnection } from 'peerjs';
 import { Room, Team, Player, AuctionConfig, GameState, UserState, Action, LogEntry, Pot, UserProfile, AuctionArchive } from '../types';
 import { INITIAL_CONFIG, MOCK_PLAYERS } from '../constants';
 
-const APP_PREFIX = 'ipl-auction-v5-';
+// Bump version to v6 to prevent collision with stale rooms from previous tests
+const APP_PREFIX = 'ipl-auction-v6-';
 const HISTORY_KEY = 'ipl_auction_archive';
 const USER_KEY = 'ipl_user_profile';
 
@@ -27,6 +27,7 @@ const shuffleByPot = (players: Player[]): Player[] => {
     });
 };
 
+// Enhanced Configuration for better Cross-Device Connectivity
 const PEER_CONFIG = {
     debug: 1,
     config: {
@@ -34,7 +35,10 @@ const PEER_CONFIG = {
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
-        ]
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+        ],
+        iceCandidatePoolSize: 10,
     }
 };
 
@@ -101,9 +105,23 @@ class RoomService {
         return new Promise((resolve, reject) => {
             if (this.peer) this.peer.destroy();
             this.peer = new Peer(`${APP_PREFIX}${roomId}`, PEER_CONFIG);
-            this.peer.on('open', () => resolve({ room: this.currentRoom!, user: this.currentUser! }));
+            
+            this.peer.on('open', () => {
+                console.log("HOST: Room Created", roomId);
+                resolve({ room: this.currentRoom!, user: this.currentUser! });
+            });
+            
             this.peer.on('connection', (conn) => this.handleConnection(conn));
-            this.peer.on('error', reject);
+            
+            this.peer.on('error', (err) => {
+                console.error("HOST: Peer Error", err);
+                if (err.type === 'unavailable-id') {
+                    // Retry with new ID if collision (rare)
+                    this.createRoom(hostProfile, roomName).then(resolve).catch(reject);
+                } else {
+                    reject(err);
+                }
+            });
         });
     }
 
@@ -113,21 +131,39 @@ class RoomService {
         this.currentUser = { id: userId, name: userProfile.name, isAdmin: false };
         this.currentRoom = null; 
 
+        // Sanitize Room ID
+        const cleanRoomId = roomId.trim().toUpperCase();
+
         return new Promise((resolve, reject) => {
             if (this.peer) this.peer.destroy();
             this.peer = new Peer(PEER_CONFIG); 
             
-            // Handle peer errors (like peer-unavailable)
-            this.peer.on('error', (err) => {
-                console.error("Peer error:", err);
-                reject(err);
+            this.peer.on('error', (err: any) => {
+                console.error("CLIENT: Peer Error", err);
+                if (err.type === 'peer-unavailable') {
+                    reject(new Error("Room not found. Check the code or ensure Host is online."));
+                } else {
+                    reject(err);
+                }
             });
 
             this.peer.on('open', () => {
-                const conn = this.peer!.connect(`${APP_PREFIX}${roomId}`);
+                console.log("CLIENT: Connected to Server. Joining Room:", cleanRoomId);
+                const conn = this.peer!.connect(`${APP_PREFIX}${cleanRoomId}`, {
+                    reliable: true,
+                    serialization: 'json'
+                });
+
+                if (!conn) {
+                    reject(new Error("Connection failed to initialize"));
+                    return;
+                }
+
                 conn.on('open', () => {
+                    console.log("CLIENT: Connection Open to Host");
                     this.hostConn = conn;
                     this.dispatch({ type: 'JOIN', payload: { userId, name: userProfile.name } });
+                    
                     conn.on('data', (data: any) => {
                         const action = data as Action;
                         if (action.type === 'SYNC') {
@@ -140,12 +176,20 @@ class RoomService {
                         }
                     });
                 });
+
+                conn.on('close', () => {
+                     console.log("CLIENT: Connection Closed");
+                });
+
                 conn.on('error', (err) => {
-                    console.error("Connection error:", err);
+                    console.error("CLIENT: Connection Error", err);
                     reject(err);
                 });
-                // Connection might hang if peer ID is valid but blocked, so we keep the timeout
-                setTimeout(() => reject(new Error("Join Timeout")), 10000);
+
+                // Extended timeout for mobile/slow networks
+                setTimeout(() => {
+                    if (!this.currentRoom) reject(new Error("Join Timeout - Host did not respond in time."));
+                }, 15000);
             });
         });
     }
@@ -153,7 +197,14 @@ class RoomService {
     private handleConnection(conn: DataConnection) {
         this.connections.push(conn);
         conn.on('data', (data: any) => this.handleAction(data as Action));
-        if (this.currentRoom) conn.send({ type: 'SYNC', payload: this.currentRoom });
+        conn.on('close', () => {
+            this.connections = this.connections.filter(c => c !== conn);
+        });
+        
+        // Send immediate SYNC on connect
+        if (this.currentRoom) {
+            conn.send({ type: 'SYNC', payload: this.currentRoom });
+        }
     }
 
     private handleAction(action: Action) {
@@ -282,12 +333,8 @@ class RoomService {
 
     private archiveRoom(room: Room) {
         if (!this.currentUser) return;
-        // Logic to allow archive even if not participating (for host) or participating
-        // Assuming we always want to archive if the room is completed and we are connected
-        
         const archive: AuctionArchive[] = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
         if (!archive.find(a => a.roomId === room.id)) {
-            // Save all teams, not just myTeam, to allow detailed review later
             archive.unshift({ roomId: room.id, roomName: room.name, completedAt: Date.now(), teams: room.teams });
             localStorage.setItem(HISTORY_KEY, JSON.stringify(archive));
         }

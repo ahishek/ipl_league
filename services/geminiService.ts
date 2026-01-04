@@ -99,11 +99,11 @@ export const generateUnsoldCommentary = async (player: Player): Promise<string> 
   
     try {
       const prompt = `
-        You are a cricket commentator. A player just went UNSOLD. Channel Richie Benaud or Kerry O'Keeffe.
+        You are a cricket commentator. A player just went UNSOLD. Channel Ravi Shastri or Kerry O'Keeffe or Harsha Bhogle.
         Player: ${player.name} (${player.position})
         
         Task:
-        Provide a 1-sentence witty or slightly tragic observation (max 15 words).
+        Provide a 1-sentence funny, witty or slightly tragic observation (max 15 words).
         - If the player is a star, act shocked.
         - If they are unknown, be dry.
         - Use "Marvelous" or a quirky Kerry O'Keeffe metaphor like "Nobody wants the last biscuit on the plate!"
@@ -131,7 +131,7 @@ export const getPlayerInsights = async (player: Player): Promise<string> => {
     const prompt = `
       Analyze ${player.name} (${player.position}) for a T20 auction.
       Return the response as 2-3 short bullet points (using a dash '-').
-      1. Recent T20 Form.
+      1. Recent T20 Form in 2025 and 2024.
       2. One "Key Stat" or Strength.
       Keep it punchy, analytical, and professional. Max 40 words total.
     `;

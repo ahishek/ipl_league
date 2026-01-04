@@ -4,7 +4,8 @@ import {
   CheckCircle, XCircle, Download, Copy, LogOut, ArrowRight, Loader2, AlertCircle, 
   Clock, Search, Sparkles, List, Star, Palette, FileText, Calendar, 
   Image as ImageIcon, Zap, History, Filter, StopCircle, UserCheck, UserMinus, 
-  TrendingUp, ChevronLeft, RefreshCcw, Edit3, AlertTriangle, Coins, Eye
+  TrendingUp, ChevronLeft, RefreshCcw, Edit3, AlertTriangle, Coins, Eye,
+  Mic, Shield, BarChart3
 } from 'lucide-react';
 import { Player, Team, Room, UserState, Pot, Position, UserProfile, AuctionArchive } from './types';
 import { TEAM_COLORS } from './constants';
@@ -323,15 +324,10 @@ export default function App() {
   };
 
   const handleStartGame = () => {
-      // Instead of dispatching directly, show confirmation modal
-      setShowStartConfirm(true);
-  };
-
-  const confirmStartGame = () => {
+      // Restore previous functionality: Immediate start
       roomService.dispatch({ type: 'START_GAME', payload: {} });
       setTimeout(() => roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} }), 500);
-      setShowStartConfirm(false);
-  }
+  };
 
   const handleEndGame = () => {
       roomService.dispatch({ type: 'END_GAME', payload: {} });
@@ -357,7 +353,7 @@ export default function App() {
 
          // 2. Generate Commentary in background
          generateAuctionCommentary(player, team, bidAmount, r.teams).then(commentary => {
-             roomService.dispatch({ type: 'ADD_LOG', payload: { message: commentary, type: 'AI' } });
+             if (commentary) roomService.dispatch({ type: 'ADD_LOG', payload: { message: commentary, type: 'AI' } });
          });
 
          setTimeout(() => {
@@ -387,7 +383,7 @@ export default function App() {
 
           // 2. Generate Commentary in background
           generateUnsoldCommentary(player).then(commentary => {
-              roomService.dispatch({ type: 'ADD_LOG', payload: { message: commentary, type: 'AI' } });
+              if (commentary) roomService.dispatch({ type: 'ADD_LOG', payload: { message: commentary, type: 'AI' } });
           });
 
           setTimeout(() => {
@@ -463,17 +459,97 @@ export default function App() {
   if (view === 'LOGIN') {
       return (
           <BackgroundWrapper>
-              <div className="flex-1 flex items-center justify-center p-6 overflow-y-auto">
-                  <div className="max-w-md w-full animate-fade-in">
-                      <div className="text-center mb-12">
-                          <div className="w-20 h-20 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-2xl"><Gavel size={40} className="text-black" strokeWidth={2.5}/></div>
-                          <h1 className="text-4xl font-display font-bold text-white mb-2">Welcome, Owner</h1>
-                          <p className="text-gray-500 font-medium">Identify yourself to join the auction hall.</p>
+              <div className="flex-1 flex flex-col lg:flex-row h-full">
+                  {/* Left Side: Hero Section */}
+                  <div className="lg:w-3/5 p-8 lg:p-16 flex flex-col justify-center relative z-10">
+                       <div className="absolute top-10 left-10 w-12 h-12 bg-yellow-500 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(234,179,8,0.4)]">
+                           <Gavel className="text-black" size={24} strokeWidth={2.5}/>
+                       </div>
+                       
+                       <div className="mt-20 lg:mt-0 space-y-6 max-w-2xl">
+                           <h1 className="text-5xl lg:text-7xl font-display font-bold text-white leading-tight">
+                               Build Your <br/>
+                               <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-yellow-600">Dream Squad.</span>
+                           </h1>
+                           <p className="text-xl text-gray-400 font-medium leading-relaxed max-w-lg">
+                               Experience the adrenaline of a real-time cricket auction. 
+                               Compete with friends, manage your purse, and let AI analyze your every move.
+                           </p>
+                           
+                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-8">
+                               <div className="bg-white/5 border border-white/5 p-4 rounded-2xl flex items-center gap-4 hover:bg-white/10 transition-colors">
+                                   <div className="bg-blue-500/20 p-3 rounded-xl text-blue-400"><Users size={20}/></div>
+                                   <div>
+                                       <h3 className="font-bold text-white">Multiplayer</h3>
+                                       <p className="text-xs text-gray-500">Real-time P2P Sync</p>
+                                   </div>
+                               </div>
+                               <div className="bg-white/5 border border-white/5 p-4 rounded-2xl flex items-center gap-4 hover:bg-white/10 transition-colors">
+                                   <div className="bg-purple-500/20 p-3 rounded-xl text-purple-400"><Sparkles size={20}/></div>
+                                   <div>
+                                       <h3 className="font-bold text-white">AI Powered</h3>
+                                       <p className="text-xs text-gray-500">Commentary & Stats</p>
+                                   </div>
+                               </div>
+                               <div className="bg-white/5 border border-white/5 p-4 rounded-2xl flex items-center gap-4 hover:bg-white/10 transition-colors">
+                                   <div className="bg-green-500/20 p-3 rounded-xl text-green-400"><TrendingUp size={20}/></div>
+                                   <div>
+                                       <h3 className="font-bold text-white">Live Bidding</h3>
+                                       <p className="text-xs text-gray-500">Dynamic Economy</p>
+                                   </div>
+                               </div>
+                               <div className="bg-white/5 border border-white/5 p-4 rounded-2xl flex items-center gap-4 hover:bg-white/10 transition-colors">
+                                   <div className="bg-pink-500/20 p-3 rounded-xl text-pink-400"><Zap size={20}/></div>
+                                   <div>
+                                       <h3 className="font-bold text-white">Smart Scout</h3>
+                                       <p className="text-xs text-gray-500">Player Analytics</p>
+                                   </div>
+                               </div>
+                           </div>
+                       </div>
+                  </div>
+
+                  {/* Right Side: Login Form */}
+                  <div className="lg:w-2/5 bg-black/40 backdrop-blur-3xl border-t lg:border-l border-white/10 p-8 lg:p-16 flex flex-col justify-center items-center z-20">
+                      <div className="w-full max-w-md space-y-8">
+                          <div className="flex items-center gap-2 mb-8 opacity-60">
+                              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                              <span className="text-xs font-mono text-green-500 uppercase tracking-widest">Auction Server Online</span>
+                          </div>
+
+                          <div className="space-y-2">
+                              <h2 className="text-3xl font-bold text-white">Owner Access</h2>
+                              <p className="text-gray-500">Enter your credentials to enter the auction hall.</p>
+                          </div>
+
+                          <div className="space-y-6 pt-4">
+                              <div className="space-y-2">
+                                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Profile Name</label>
+                                  <input 
+                                      type="text" 
+                                      placeholder="e.g. Nita Ambani" 
+                                      className="w-full bg-white/5 border border-white/10 rounded-2xl p-6 text-white text-lg focus:outline-none focus:border-yellow-500/50 focus:ring-1 focus:ring-yellow-500/20 transition-all placeholder:text-gray-700" 
+                                      value={loginName} 
+                                      onChange={e => setLoginName(e.target.value)} 
+                                      onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                                  />
+                              </div>
+
+                              <button 
+                                  onClick={handleLogin} 
+                                  disabled={!loginName} 
+                                  className="w-full group relative overflow-hidden bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-black font-bold py-6 rounded-2xl transition-all shadow-[0_0_30px_rgba(234,179,8,0.2)] hover:shadow-[0_0_50px_rgba(234,179,8,0.4)] disabled:opacity-50 disabled:shadow-none active:scale-[0.98]"
+                              >
+                                  <span className="relative z-10 flex items-center justify-center gap-3 text-lg uppercase tracking-wider">
+                                      Enter Auction <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform"/>
+                                  </span>
+                              </button>
+                          </div>
+                          
+                          <p className="text-center text-xs text-gray-600 font-medium pt-8">
+                              Powered by Gemini 2.5 • PeerJS • React
+                          </p>
                       </div>
-                      <GlassCard className="p-10 space-y-8">
-                          <input type="text" placeholder="Owner Name" className="w-full bg-black/40 border border-white/10 rounded-2xl p-5 text-white focus:outline-none focus:border-yellow-500/50 transition-all text-lg" value={loginName} onChange={e => setLoginName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()}/>
-                          <button onClick={handleLogin} disabled={!loginName} className="w-full bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-black font-bold py-5 rounded-2xl transition-all shadow-xl disabled:opacity-50 active:scale-95">Enter Hall</button>
-                      </GlassCard>
                   </div>
               </div>
           </BackgroundWrapper>
@@ -1034,7 +1110,7 @@ export default function App() {
 
                     <div className="flex gap-4 mt-auto pt-6 border-t border-white/10">
                         <button onClick={() => setShowStartConfirm(false)} className="flex-1 py-4 rounded-xl font-bold text-gray-400 hover:bg-white/5 transition-all uppercase text-xs tracking-widest">Edit Setup</button>
-                        <button onClick={confirmStartGame} className="flex-[2] bg-green-600 hover:bg-green-500 py-4 rounded-xl font-bold text-white shadow-xl transition-all uppercase text-xs tracking-widest flex items-center justify-center gap-2">Confirm & Start Auction <ArrowRight size={14}/></button>
+                        <button onClick={() => { roomService.dispatch({ type: 'START_GAME', payload: {} }); setTimeout(() => roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} }), 500); setShowStartConfirm(false); }} className="flex-[2] bg-green-600 hover:bg-green-500 py-4 rounded-xl font-bold text-white shadow-xl transition-all uppercase text-xs tracking-widest flex items-center justify-center gap-2">Confirm & Start Auction <ArrowRight size={14}/></button>
                     </div>
 
                     {viewPlayerPool && (

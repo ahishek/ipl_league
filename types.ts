@@ -111,4 +111,5 @@ export type Action =
   | { type: 'TOGGLE_PAUSE'; payload: {} }
   | { type: 'UPDATE_TIMER'; payload: { timer: number } }
   | { type: 'IMPORT_PLAYERS'; payload: Player[] }
-  | { type: 'ADD_LOG'; payload: { message: string; type: LogEntry['type'] } };
+  | { type: 'ADD_LOG'; payload: { message: string; type: LogEntry['type'] } }
+  | { type: 'PING'; payload: {} };

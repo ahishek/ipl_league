@@ -97,6 +97,7 @@ export interface Room {
 
 export type Action = 
   | { type: 'SYNC'; payload: Room }
+  | { type: 'REQUEST_SYNC'; payload?: {} }
   | { type: 'JOIN'; payload: { userId: string; name: string } }
   | { type: 'ADD_TEAM'; payload: Team }
   | { type: 'UPDATE_CONFIG'; payload: Partial<AuctionConfig> }
@@ -112,4 +113,6 @@ export type Action =
   | { type: 'UPDATE_TIMER'; payload: { timer: number } }
   | { type: 'IMPORT_PLAYERS'; payload: Player[] }
   | { type: 'ADD_LOG'; payload: { message: string; type: LogEntry['type'] } }
-  | { type: 'PING'; payload: {} };
+  | { type: 'PING'; payload: {} }
+  | { type: 'GET_LOGO'; payload: { teamId: string } }
+  | { type: 'LOGO_RESPONSE'; payload: { teamId: string; logoUrl: string } };

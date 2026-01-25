@@ -46,14 +46,24 @@ const shuffleByPot = (players: Player[]): Player[] => {
     });
 };
 
+// --- UPDATED NETWORK CONFIG ---
+// Enhanced ICE servers to punch through symmetric NATs and firewalls
 const PEER_CONFIG = {
     debug: 2, 
+    pingInterval: 5000, // Keep socket alive
     config: {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            { urls: 'stun:global.stun.twilio.com:3478' },
+            { urls: 'stun:stun.services.mozilla.com' },
+            { urls: 'stun:stun.kytes.co' }
         ],
-        sdpSemantics: 'unified-plan'
+        sdpSemantics: 'unified-plan',
+        iceCandidatePoolSize: 10
     }
 };
 
@@ -70,6 +80,7 @@ class RoomService {
 
     pingIntervalId: any = null;
     monitorIntervalId: any = null;
+    signalingKeepAliveId: any = null; // New Keep-Alive for Host
     lastHostPing: number = 0;
     
     activeRoomId: string | null = null;
@@ -121,6 +132,7 @@ class RoomService {
         this.log('SYSTEM', 'Cleaning up resources...');
         this.stopHeartbeat();
         this.stopMonitor();
+        this.stopSignalingKeepAlive(); // Cleanup Host Keep-Alive
         this.connections.forEach(c => c.close());
         this.connections = [];
         if (this.hostConn) {
@@ -238,6 +250,7 @@ class RoomService {
             this.peer.on('open', (id) => {
                 this.log('HOST', `Peer Open. ID: ${id}`);
                 this.startHeartbeat(); 
+                this.startSignalingKeepAlive(); // Ensure Host stays visible in Signaling Server
                 resolve({ room: this.currentRoom!, user: this.currentUser! });
             });
             
@@ -622,6 +635,23 @@ class RoomService {
 
     private stopMonitor() {
         if (this.monitorIntervalId) clearInterval(this.monitorIntervalId);
+    }
+
+    private startSignalingKeepAlive() {
+        this.stopSignalingKeepAlive();
+        this.log('HOST', 'Starting Signaling Keep-Alive Monitor');
+        this.signalingKeepAliveId = setInterval(() => {
+            if (this.peer && !this.peer.destroyed) {
+                if (this.peer.disconnected) {
+                    this.warn('SYSTEM', 'Host disconnected from signaling. Forcing Reconnect...');
+                    this.peer.reconnect();
+                }
+            }
+        }, 5000);
+    }
+
+    private stopSignalingKeepAlive() {
+        if (this.signalingKeepAliveId) clearInterval(this.signalingKeepAliveId);
     }
 
     private async handleReconnect(roomId: string, user: UserProfile) {

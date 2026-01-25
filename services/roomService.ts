@@ -2,8 +2,8 @@ import Peer, { DataConnection } from 'peerjs';
 import { Room, Team, Player, AuctionConfig, GameState, UserState, Action, LogEntry, Pot, UserProfile, AuctionArchive } from '../types';
 import { INITIAL_CONFIG, MOCK_PLAYERS } from '../constants';
 
-// Bump version to force clean slate
-const APP_PREFIX = 'ipl-auction-v13-';
+// Bump version to 'v14' to ensure we don't conflict with cached/stale sessions from v13
+const APP_PREFIX = 'ipl-auction-v14-';
 const HISTORY_KEY = 'ipl_auction_archive';
 const USER_KEY = 'ipl_user_profile';
 
@@ -27,14 +27,20 @@ const shuffleByPot = (players: Player[]): Player[] => {
     });
 };
 
+// Expanded STUN server list for better NAT penetration
 const PEER_CONFIG = {
-    debug: 1, // Reduced debug noise
+    debug: 2, // Level 2: Warnings and Errors
     config: {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
+            { urls: 'stun:global.stun.twilio.com:3478' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' }
         ],
-        sdpSemantics: 'unified-plan'
+        sdpSemantics: 'unified-plan',
+        iceCandidatePoolSize: 10,
     }
 };
 
@@ -47,11 +53,14 @@ class RoomService {
     isHost: boolean = false;
     stateSubscribers: ((room: Room) => void)[] = [];
     
-    // Heartbeat & Monitoring
+    // Connection Health Monitoring
     pingIntervalId: any = null;
     monitorIntervalId: any = null;
-    lastHostPing: number = Date.now();
-    isConnecting: boolean = false;
+    lastHostPing: number = 0;
+    
+    // Reconnection State
+    activeRoomId: string | null = null;
+    isReconnecting: boolean = false;
 
     constructor() {
         if (typeof window !== 'undefined') {
@@ -61,13 +70,36 @@ class RoomService {
         }
     }
 
+    // --- Instrumentation / Logging ---
+    private log(tag: string, msg: string, data?: any) {
+        const time = new Date().toISOString().split('T')[1].substring(0, 8);
+        console.log(`%c[${time}][${tag}] ${msg}`, 'color: #0ea5e9; font-weight: bold;', data || '');
+    }
+
+    private warn(tag: string, msg: string, data?: any) {
+        const time = new Date().toISOString().split('T')[1].substring(0, 8);
+        console.warn(`%c[${time}][${tag}] ${msg}`, 'color: #f59e0b; font-weight: bold;', data || '');
+    }
+
+    private error(tag: string, msg: string, err?: any) {
+        const time = new Date().toISOString().split('T')[1].substring(0, 8);
+        console.error(`%c[${time}][${tag}] ${msg}`, 'color: #ef4444; font-weight: bold;', err || '');
+    }
+
     private cleanup() {
+        this.log('SYSTEM', 'Cleaning up resources...');
         this.stopHeartbeat();
         this.stopMonitor();
-        this.peer?.destroy();
-        this.peer = null;
+        this.connections.forEach(c => c.close());
         this.connections = [];
-        this.hostConn = null;
+        if (this.hostConn) {
+            this.hostConn.close();
+            this.hostConn = null;
+        }
+        if (this.peer) {
+            this.peer.destroy();
+            this.peer = null;
+        }
     }
 
     getUserProfile(): UserProfile | null {
@@ -85,6 +117,8 @@ class RoomService {
         localStorage.setItem(USER_KEY, JSON.stringify(profile));
         return profile;
     }
+
+    // --- Host Logic ---
 
     async createRoom(hostProfile: UserProfile, roomName: string): Promise<{ room: Room, user: UserState }> {
         this.cleanup();
@@ -115,71 +149,144 @@ class RoomService {
         this.currentUser = { id: userId, name: hostProfile.name, isAdmin: true };
 
         return new Promise((resolve, reject) => {
-            this.peer = new Peer(`${APP_PREFIX}${roomId}`, PEER_CONFIG);
+            this.log('HOST', `Creating room with ID: ${roomId}`);
             
-            this.peer.on('open', () => {
-                console.log("HOST: Room Ready", roomId);
-                this.startHeartbeat();
+            try {
+                this.peer = new Peer(`${APP_PREFIX}${roomId}`, PEER_CONFIG);
+            } catch (e) {
+                this.error('HOST', 'Failed to initialize PeerJS', e);
+                reject(e);
+                return;
+            }
+            
+            this.peer.on('open', (id) => {
+                this.log('HOST', `Peer Open. ID Registered: ${id}`);
+                this.startHeartbeat(); // Start sending pings
                 resolve({ room: this.currentRoom!, user: this.currentUser! });
             });
             
             this.peer.on('connection', (conn) => this.handleHostConnection(conn));
             
             this.peer.on('error', (err) => {
-                console.error("HOST: Peer Error", err);
+                this.error('HOST', `Peer Error: ${err.type}`, err);
                 if (err.type === 'unavailable-id') {
+                    this.warn('HOST', 'ID Taken, retrying with new ID...');
+                    // Retry once with a new ID
                     this.createRoom(hostProfile, roomName).then(resolve).catch(reject);
                 } else {
                     reject(err);
                 }
             });
+
+            this.peer.on('disconnected', () => {
+                this.warn('HOST', 'Disconnected from signaling server. Attempting reconnect...');
+                this.peer?.reconnect();
+            });
         });
     }
+
+    private handleHostConnection(conn: DataConnection) {
+        this.log('HOST', `Incoming connection from ${conn.peer}`);
+        
+        conn.on('open', () => {
+            this.log('HOST', `Connection established with ${conn.peer}`);
+            this.connections.push(conn);
+            
+            // Note: We DO NOT send SYNC immediately anymore. 
+            // We wait for the 'REQUEST_SYNC' message from client to prevent race conditions.
+        });
+
+        conn.on('data', (data: any) => {
+            // Special Handshake Handling
+            if (data && data.type === 'REQUEST_SYNC') {
+                this.log('HOST', `Received REQUEST_SYNC from ${conn.peer}`);
+                if (this.currentRoom) {
+                    conn.send({ type: 'SYNC', payload: this.currentRoom });
+                }
+                return;
+            }
+            // Standard Action Handling
+            this.handleAction(data as Action);
+        });
+        
+        conn.on('close', () => {
+            this.log('HOST', `Connection closed: ${conn.peer}`);
+            this.connections = this.connections.filter(c => c !== conn);
+        });
+        
+        conn.on('error', (err) => {
+             this.error('HOST', `Connection error with ${conn.peer}`, err);
+             this.connections = this.connections.filter(c => c !== conn);
+        });
+    }
+
+    // --- Client Logic ---
 
     async joinRoom(roomId: string, userProfile: UserProfile): Promise<{ room: Room | null, user: UserState }> {
         this.isHost = false;
         const userId = userProfile.id;
         this.currentUser = { id: userId, name: userProfile.name, isAdmin: false };
         this.currentRoom = null; 
-        const cleanRoomId = roomId.trim().toUpperCase();
+        this.activeRoomId = roomId.trim().toUpperCase();
 
-        if (this.peer) this.peer.destroy();
+        if (this.peer) {
+            this.log('CLIENT', 'Destroying old peer instance before join');
+            this.peer.destroy();
+        }
         this.peer = new Peer(PEER_CONFIG);
 
         return new Promise((resolve, reject) => {
-            const attemptConnection = () => {
-                if (!this.peer || this.peer.destroyed) return;
-                console.log(`CLIENT: Connecting to ${APP_PREFIX}${cleanRoomId}`);
-                
-                const conn = this.peer.connect(`${APP_PREFIX}${cleanRoomId}`, {
-                    reliable: true,
-                    serialization: 'json'
-                });
+            this.log('CLIENT', `Initializing Peer to join ${this.activeRoomId}`);
 
-                if (!conn) {
-                    reject(new Error("Failed to create connection"));
-                    return;
-                }
+            this.peer!.on('open', (id) => {
+                this.log('CLIENT', `Peer initialized with ID: ${id}`);
+                this.connectToHost(this.activeRoomId!, userProfile)
+                    .then((data) => {
+                        this.startMonitor(this.activeRoomId!, userProfile);
+                        resolve(data);
+                    })
+                    .catch(reject);
+            });
 
-                // Connection Timeout logic
-                const timer = setTimeout(() => {
-                    if (!this.currentRoom) {
-                        conn.close();
-                        reject(new Error("Connection timed out"));
-                    }
-                }, 10000);
-
-                this.setupClientConnection(conn, (data: any) => {
-                    clearTimeout(timer);
-                    resolve(data);
-                    this.startMonitor(cleanRoomId, userProfile);
-                });
-            };
-
-            this.peer.on('open', attemptConnection);
-            this.peer.on('error', (err) => {
-                console.error("CLIENT: Peer Error", err);
+            this.peer!.on('error', (err) => {
+                this.error('CLIENT', `Peer Error: ${err.type}`, err);
                 reject(err);
+            });
+        });
+    }
+
+    private connectToHost(roomId: string, user: UserProfile): Promise<{ room: Room | null, user: UserState }> {
+        return new Promise((resolve, reject) => {
+            if (!this.peer || this.peer.destroyed) {
+                reject(new Error("Peer destroyed"));
+                return;
+            }
+
+            const hostPeerId = `${APP_PREFIX}${roomId}`;
+            this.log('CLIENT', `Attempting to connect to Host: ${hostPeerId}`);
+
+            const conn = this.peer.connect(hostPeerId, {
+                reliable: true,
+                serialization: 'json'
+            });
+
+            if (!conn) {
+                reject(new Error("Failed to create connection object"));
+                return;
+            }
+
+            // Safety timeout: If connection doesn't open in 10s, fail.
+            const timeout = setTimeout(() => {
+                if (!conn.open) {
+                    this.error('CLIENT', 'Connection timed out (10s)');
+                    conn.close();
+                    reject(new Error("Connection timed out - Host unreachable"));
+                }
+            }, 10000);
+
+            this.setupClientConnection(conn, (data) => {
+                clearTimeout(timeout);
+                resolve(data);
             });
         });
     }
@@ -188,56 +295,51 @@ class RoomService {
         this.hostConn = conn;
         
         conn.on('open', () => {
-            console.log("CLIENT: Channel Open");
-            this.hostConn = conn;
+            this.log('CLIENT', 'Data Channel OPEN. Performing Handshake...');
             this.lastHostPing = Date.now();
+            
+            // 1. Request State immediately
+            conn.send({ type: 'REQUEST_SYNC' });
+            
+            // 2. Identify self
             if (this.currentUser) {
                 conn.send({ type: 'JOIN', payload: { userId: this.currentUser.id, name: this.currentUser.name } });
             }
         });
 
         conn.on('data', (data: any) => {
-            this.lastHostPing = Date.now();
+            this.lastHostPing = Date.now(); // Update heartbeat on ANY data received
+            
             const action = data as Action;
             
             if (action.type === 'SYNC') {
+                if (!this.currentRoom) {
+                    this.log('CLIENT', 'Initial SYNC received');
+                }
                 this.currentRoom = action.payload;
                 if (this.currentRoom.status === 'COMPLETED') this.archiveRoom(this.currentRoom);
                 this.notifySubscribers();
+                
+                // Resolve the Join Promise if this is the first sync
                 if (onReady) {
                     onReady({ room: this.currentRoom, user: this.currentUser! });
-                    onReady = undefined; // Ensure only called once
+                    onReady = undefined; 
                 }
             } else if (action.type === 'PING') {
-                // Heartbeat received, lastHostPing updated above
+                // Heartbeat - handled by lastHostPing update above
+                // Optionally log pings at debug level if needed, but creates noise
             } else {
                 this.handleAction(action);
             }
         });
 
         conn.on('close', () => {
-            console.warn("CLIENT: Connection Closed");
+            this.warn('CLIENT', 'Connection to Host CLOSED');
             this.hostConn = null;
         });
 
-        conn.on('error', (err) => console.error("CLIENT: Conn Error", err));
-    }
-
-    private handleHostConnection(conn: DataConnection) {
-        this.connections.push(conn);
-        console.log("HOST: Peer Connected", conn.peer);
-
-        conn.on('data', (data: any) => this.handleAction(data as Action));
-        
-        conn.on('close', () => {
-            this.connections = this.connections.filter(c => c !== conn);
-        });
-        
-        conn.on('open', () => {
-            // Immediate SYNC on connect
-            if (this.currentRoom) {
-                conn.send({ type: 'SYNC', payload: this.currentRoom });
-            }
+        conn.on('error', (err) => {
+            this.error('CLIENT', 'Connection Error', err);
         });
     }
 
@@ -258,15 +360,15 @@ class RoomService {
         // Host Logic
         if (!this.currentRoom) return;
         
-        // Deep copy to ensure immutability trigger in React
         let room: Room = JSON.parse(JSON.stringify(this.currentRoom));
         let logs = [...room.gameState.logs];
 
-        // ... Action Reducers ...
         switch (action.type) {
             case 'JOIN':
+                this.log('HOST', `User Joined: ${action.payload.name}`);
                 if (!room.members.find(m => m.userId === action.payload.userId)) {
                     room.members.push({ ...action.payload, isAdmin: false });
+                    this.broadcast({ type: 'SYNC', payload: room }); // Inform everyone of new user
                 }
                 break;
             case 'ADD_TEAM':
@@ -289,7 +391,7 @@ class RoomService {
                 logs.unshift({ id: Date.now().toString(), message: "Host updated Player Pool", type: 'SYSTEM', timestamp: new Date() });
                 break;
             case 'START_GAME':
-                console.log("HOST: Starting Game");
+                this.log('HOST', 'Starting Game');
                 room.status = 'ACTIVE';
                 room.gameState.isPaused = false;
                 logs.unshift({ id: Date.now().toString(), message: "Auction Hall is Live", type: 'SYSTEM', timestamp: new Date() });
@@ -308,6 +410,7 @@ class RoomService {
                 if (team && player && amount > currentAmt && team.budget >= amount) {
                     room.gameState.currentBid = { teamId, amount, timestamp: Date.now() };
                     logs.unshift({ id: Date.now().toString(), message: `${team.name} bid ${amount} L`, type: 'BID', timestamp: new Date() });
+                    this.log('HOST', `Bid accepted: ${amount}L from ${team.name}`);
                 }
                 break;
             case 'SOLD':
@@ -374,15 +477,24 @@ class RoomService {
         } else if (this.hostConn && this.hostConn.open) {
             this.hostConn.send(action);
         } else {
-            console.warn("CLIENT: Cannot dispatch, no connection");
+            this.warn('CLIENT', "Cannot dispatch, no connection");
         }
     }
 
     private broadcast(action: Action) {
-        // Filter out closed connections lazily
+        // Clean up closed connections before sending
+        const initialCount = this.connections.length;
         this.connections = this.connections.filter(c => c.open);
+        if (this.connections.length < initialCount) {
+            this.log('HOST', `Pruned ${initialCount - this.connections.length} closed connections`);
+        }
+
         this.connections.forEach(conn => {
-            try { conn.send(action); } catch (e) { console.error("Broadcast failed", e); }
+            try { 
+                conn.send(action); 
+            } catch (e) { 
+                this.error('HOST', `Broadcast failed to ${conn.peer}`, e); 
+            }
         });
     }
 
@@ -397,52 +509,69 @@ class RoomService {
         if (this.pingIntervalId) clearInterval(this.pingIntervalId);
     }
 
+    // --- Connectivity Monitoring ---
+
     private startMonitor(roomId: string, user: UserProfile) {
         this.stopMonitor();
+        // Check health every 2 seconds
         this.monitorIntervalId = setInterval(() => {
             if (this.isHost) return;
+            
             const timeDiff = Date.now() - this.lastHostPing;
-            // If no ping for 10 seconds, try to reconnect
-            if (timeDiff > 10000 && !this.isConnecting) {
-                console.warn("CLIENT: Connection lost. Reconnecting...");
-                this.reconnect(roomId, user);
+            
+            // If connected but no ping for 10 seconds, assume dead
+            if (timeDiff > 10000 && !this.isReconnecting) {
+                this.warn('MONITOR', `Connection lost (Last ping ${timeDiff}ms ago). Triggering Reconnect.`);
+                this.handleReconnect(roomId, user);
             }
-        }, 5000);
+        }, 2000);
     }
 
     private stopMonitor() {
         if (this.monitorIntervalId) clearInterval(this.monitorIntervalId);
     }
 
-    private async reconnect(roomId: string, user: UserProfile) {
-        this.isConnecting = true;
-        if (this.hostConn) this.hostConn.close();
+    private async handleReconnect(roomId: string, user: UserProfile) {
+        if (this.isReconnecting) return;
+        this.isReconnecting = true;
+
+        this.log('RECONNECT', 'Attempting to restore connection...');
         
+        // Cleanup existing connection object
+        if (this.hostConn) {
+             try { this.hostConn.close(); } catch(e){}
+             this.hostConn = null;
+        }
+
         try {
-            if (!this.peer || this.peer.destroyed) {
-                 this.peer = new Peer(PEER_CONFIG);
-                 await new Promise<void>(resolve => this.peer!.on('open', () => resolve()));
+            // Re-use peer instance if it's still alive, otherwise we need a full re-join
+            if (!this.peer || this.peer.destroyed || this.peer.disconnected) {
+                this.log('RECONNECT', 'Peer destroyed/disconnected. Recreating Peer...');
+                // We cannot easily recreate Peer with same ID if the server thinks it's taken.
+                // Best strategy: Destroy old, create new, connect to Host.
+                if (this.peer) this.peer.destroy();
+                this.peer = new Peer(PEER_CONFIG);
+                await new Promise<void>(resolve => this.peer!.on('open', () => resolve()));
             }
 
-            const conn = this.peer!.connect(`${APP_PREFIX}${roomId}`, { reliable: true, serialization: 'json' });
+            const conn = this.peer!.connect(`${APP_PREFIX}${roomId}`, { 
+                reliable: true, 
+                serialization: 'json' 
+            });
+            
             if (conn) {
                 this.setupClientConnection(conn);
-                // Wait for open
-                setTimeout(() => {
-                    if (conn.open) {
-                        conn.send({ type: 'JOIN', payload: { userId: user.id, name: user.name } });
-                        console.log("CLIENT: Reconnected successfully");
-                    }
-                }, 2000);
+                // Wait for Open event in setupClientConnection
             }
         } catch (e) {
-            console.error("CLIENT: Reconnect failed", e);
+            this.error('RECONNECT', 'Reconnection failed', e);
         } finally {
-            this.isConnecting = false;
+            // Reset flag after a delay to allow another attempt if this one fails
+            setTimeout(() => { this.isReconnecting = false; }, 5000);
         }
     }
 
-    // --- Subscription & Persistence ---
+    // --- Persistence ---
 
     private archiveRoom(room: Room) {
         const archive: AuctionArchive[] = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');

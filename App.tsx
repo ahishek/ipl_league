@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Play, Pause, SkipForward, Settings, Gavel, Users, Activity, Trophy, User, Plus,
@@ -613,8 +614,6 @@ export default function App() {
   }
 
   // The main wrapper for Lobby, Game, Completed (truncated for brevity as it is identical logic)
-  // ... (Code continues with standard render logic for LOBBY, GAME, COMPLETED which uses `view` state)
-  // Re-injecting the massive block from previous file content to ensure it works
   if (view === 'LOBBY' || view === 'GAME' || view === 'COMPLETED') {
     return (
       <BackgroundWrapper>
@@ -887,6 +886,45 @@ export default function App() {
                 </div>
             </div>
         )}
+        
+        {view === 'COMPLETED' && (
+            <div className="max-w-7xl mx-auto p-8 lg:p-12 w-full h-full overflow-y-auto animate-fade-in flex flex-col">
+                <div className="flex flex-col items-center mb-10 text-center shrink-0">
+                    <Trophy size={80} className="text-yellow-500 mb-6 drop-shadow-[0_0_30px_rgba(234,179,8,0.5)]" fill="currentColor"/>
+                    <h1 className="text-5xl font-display font-bold text-white mb-4 uppercase tracking-tight">Auction Concluded</h1>
+                    <p className="text-gray-400 text-sm font-medium uppercase tracking-widest max-w-lg leading-relaxed">
+                        All squads have been finalized. The data has been archived to your dashboard history.
+                    </p>
+                    <button onClick={() => setView('HOME')} className="mt-8 bg-blue-600 hover:bg-blue-500 px-8 py-3 rounded-xl font-bold text-white transition-all shadow-lg flex items-center gap-2">
+                        <ArrowRight size={18}/> Return to Dashboard
+                    </button>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 w-full pb-10">
+                    {room?.teams.map(t => (
+                        <GlassCard key={t.id} className="p-6 flex flex-col h-full border-white/10 opacity-80 hover:opacity-100 transition-opacity">
+                             <div className="flex items-center gap-4 mb-6 border-b border-white/5 pb-4">
+                                <div className="w-14 h-14 rounded-xl bg-black border-2 flex items-center justify-center p-2 shadow-lg shrink-0" style={{ borderColor: t.color }}>
+                                    {t.logoUrl ? <img src={t.logoUrl} className="w-full h-full object-contain" /> : <div className="text-white font-bold">{t.name[0]}</div>}
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-white truncate">{t.name}</h3>
+                                    <p className="text-xs text-gray-500 uppercase tracking-wider">Spent: {t.roster.reduce((a,b)=>a+(b.soldPrice||0),0)} L</p>
+                                </div>
+                            </div>
+                            <div className="flex-1 space-y-2 max-h-[200px] overflow-y-auto custom-scrollbar pr-2">
+                                {t.roster.map(p => (
+                                    <div key={p.id} className="flex justify-between text-[10px] p-2 bg-white/5 rounded-lg">
+                                        <span className="text-gray-300">{p.name}</span>
+                                        <span className="text-yellow-500 font-mono">{p.soldPrice}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </GlassCard>
+                    ))}
+                </div>
+            </div>
+        )}
 
         {/* Other modal renderings (StartConfirm, EndConfirm, Settings) remain unchanged ... */}
         {showStartConfirm && (
@@ -1007,6 +1045,59 @@ export default function App() {
                     )}
                 </GlassCard>
              </div>
+        )}
+
+        {viewTeamRoster && (
+            <div className="fixed inset-0 z-[120] bg-black/90 backdrop-blur-md flex items-center justify-center p-6" onClick={() => setViewTeamRoster(null)}>
+                <GlassCard className="max-w-xl w-full flex flex-col bg-[#0a0a0a] border-white/10 shadow-2xl max-h-[80vh]" onClick={e => e.stopPropagation()}>
+                    <div className="p-6 border-b border-white/10 flex items-center gap-4 shrink-0" style={{borderColor: viewTeamRoster.color}}>
+                        <div className="w-16 h-16 rounded-2xl bg-black border-2 flex items-center justify-center p-2 shadow-lg shrink-0" style={{ borderColor: viewTeamRoster.color }}>
+                             {viewTeamRoster.logoUrl ? <img src={viewTeamRoster.logoUrl} className="w-full h-full object-contain" /> : <div className="text-xl font-bold text-white">{viewTeamRoster.name[0]}</div>}
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="text-2xl font-bold text-white leading-none mb-1">{viewTeamRoster.name}</h3>
+                            <p className="text-sm text-gray-500 font-bold uppercase tracking-wider">{viewTeamRoster.ownerName}</p>
+                        </div>
+                        <button onClick={() => setViewTeamRoster(null)} className="p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"><XCircle size={24}/></button>
+                    </div>
+                    
+                    <div className="p-6 grid grid-cols-2 gap-4 border-b border-white/5 shrink-0">
+                         <div className="bg-white/5 p-3 rounded-xl border border-white/5">
+                             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1">Purse Remaining</span>
+                             <span className={`text-xl font-mono font-bold ${viewTeamRoster.budget < 200 ? 'text-red-500' : 'text-green-500'}`}>{viewTeamRoster.budget} L</span>
+                         </div>
+                         <div className="bg-white/5 p-3 rounded-xl border border-white/5">
+                             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1">Squad Strength</span>
+                             <span className="text-xl font-mono font-bold text-blue-400">{viewTeamRoster.roster.length} / {room?.config.maxPlayers}</span>
+                         </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+                        {viewTeamRoster.roster.length === 0 ? (
+                            <div className="h-40 flex items-center justify-center text-gray-600 italic text-xs">No players acquired yet.</div>
+                        ) : (
+                            <table className="w-full text-left text-xs">
+                                <thead className="bg-white/5 text-gray-400 sticky top-0">
+                                    <tr>
+                                        <th className="p-3 font-bold uppercase">Player</th>
+                                        <th className="p-3 font-bold uppercase">Role</th>
+                                        <th className="p-3 font-bold uppercase text-right">Price</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/5">
+                                    {viewTeamRoster.roster.map(p => (
+                                        <tr key={p.id} className="hover:bg-white/5">
+                                            <td className="p-3 font-medium text-white">{p.name}</td>
+                                            <td className="p-3 text-gray-500">{p.position}</td>
+                                            <td className="p-3 font-mono text-yellow-500 font-bold text-right">{p.soldPrice} L</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </GlassCard>
+            </div>
         )}
 
         {showEndConfirm && (

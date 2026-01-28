@@ -66,7 +66,6 @@ const PEER_CONFIG = {
             // Standard Fallbacks
             { urls: 'stun:global.stun.twilio.com:3478' },
             { urls: 'stun:stun.services.mozilla.com' }
-            { urls: 'stun:stun.kytes.co' }
         ],
         sdpSemantics: 'unified-plan',
         iceCandidatePoolSize: 10
@@ -113,6 +112,41 @@ class RoomService {
     private error(tag: string, msg: string, err?: any) {
         const time = new Date().toISOString().split('T')[1].substring(0, 8);
         console.error(`%c[${time}][${tag}] ${msg}`, 'color: #ef4444; font-weight: bold;', err || '');
+    }
+
+    // --- DIAGNOSTICS: Deep Connection Monitoring ---
+    private attachIceMonitor(conn: DataConnection, role: 'HOST' | 'CLIENT') {
+        // Access raw RTCPeerConnection (hidden in PeerJS types usually)
+        const pc = (conn as any).peerConnection;
+        
+        if (!pc) {
+            this.warn(`${role}_DIAG`, 'No PeerConnection found attached to DataConnection.');
+            return;
+        }
+
+        let candidatesGathered = 0;
+
+        // Monitor ICE Candidate Gathering
+        // This tells us if STUN/TURN servers are actually reachable
+        pc.addEventListener('icecandidate', (event: any) => {
+            if (event.candidate) {
+                candidatesGathered++;
+                this.log(`${role}_ICE`, `Candidate gathered: ${event.candidate.type} (${event.candidate.protocol})`);
+            } else {
+                this.log(`${role}_ICE`, `Gathering Complete. Total Candidates: ${candidatesGathered}`);
+                if (candidatesGathered === 0) {
+                    this.error(`${role}_ICE`, 'CRITICAL: No ICE candidates gathered. Firewall likely blocking STUN traffic.');
+                }
+            }
+        });
+
+        // Monitor Connection State Changes
+        pc.addEventListener('iceconnectionstatechange', () => {
+            this.log(`${role}_ICE`, `ICE State Change: ${pc.iceConnectionState}`);
+            if (pc.iceConnectionState === 'failed') {
+                 this.error(`${role}_ICE`, 'ICE Connection FAILED. Peer cannot be reached directly.');
+            }
+        });
     }
 
     // --- INSTRUMENTATION: Payload Analytics ---
@@ -219,6 +253,9 @@ class RoomService {
         const userId = hostProfile.id;
         this.isHost = true;
         
+        const fullHostId = `${APP_PREFIX}${roomId}`;
+        this.log('HOST_DIAG', `Initializing Host. Calculated ID: ${fullHostId}`);
+        
         this.currentRoom = {
             id: roomId,
             hostId: userId,
@@ -242,10 +279,8 @@ class RoomService {
         this.currentUser = { id: userId, name: hostProfile.name, isAdmin: true };
 
         return new Promise((resolve, reject) => {
-            this.log('HOST', `Creating room with ID: ${roomId}`);
-            
             try {
-                this.peer = new Peer(`${APP_PREFIX}${roomId}`, PEER_CONFIG);
+                this.peer = new Peer(fullHostId, PEER_CONFIG);
             } catch (e) {
                 this.error('HOST', 'Failed to initialize PeerJS', e);
                 reject(e);
@@ -280,6 +315,7 @@ class RoomService {
 
     private handleHostConnection(conn: DataConnection) {
         this.log('HOST', `Incoming connection from ${conn.peer}`);
+        this.attachIceMonitor(conn, 'HOST'); // Attach monitoring immediately
         
         conn.on('open', () => {
             this.log('RCA_CONN', `Host Connected to ${conn.peer}. Serialization Mode: [${conn.serialization}]`);
@@ -334,6 +370,9 @@ class RoomService {
         this.currentUser = { id: userId, name: userProfile.name, isAdmin: false };
         this.currentRoom = null; 
         this.activeRoomId = roomId.trim().toUpperCase();
+        
+        const targetHostId = `${APP_PREFIX}${this.activeRoomId}`;
+        this.log('CLIENT_DIAG', `Initializing Client. Target Host ID: ${targetHostId}`);
 
         const tryConnect = async (attempt: number): Promise<{ room: Room | null, user: UserState }> => {
             if (this.peer) this.peer.destroy();
@@ -387,6 +426,7 @@ class RoomService {
             }
 
             const hostPeerId = `${APP_PREFIX}${roomId}`;
+            this.log('CLIENT_DIAG', `Connecting to Host Peer ID: ${hostPeerId}`);
             
             // EXPLICITLY SETTING SERIALIZATION TO BINARY
             const conn = this.peer.connect(hostPeerId, {
@@ -398,6 +438,8 @@ class RoomService {
                 reject(new Error("Failed to create connection object"));
                 return;
             }
+            
+            this.attachIceMonitor(conn, 'CLIENT');
 
             const timeout = setTimeout(() => {
                 if (!conn.open) {
@@ -664,8 +706,12 @@ class RoomService {
         this.log('HOST', 'Starting Signaling Keep-Alive Monitor');
         this.signalingKeepAliveId = setInterval(() => {
             if (this.peer && !this.peer.destroyed) {
-                if (this.peer.disconnected) {
-                    this.warn('SYSTEM', 'Host disconnected from signaling. Forcing Reconnect...');
+                // DEEP SOCKET INSPECTION
+                const internalSocket = (this.peer as any).socket;
+                const wsState = internalSocket?._socket?.readyState; // 1 = OPEN
+
+                if (this.peer.disconnected || (wsState !== undefined && wsState !== 1)) {
+                    this.warn('SYSTEM', `Host disconnected from signaling (WS State: ${wsState}). Forcing Reconnect...`);
                     this.peer.reconnect();
                 }
             }

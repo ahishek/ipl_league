@@ -3,8 +3,8 @@ import Peer, { DataConnection } from 'peerjs';
 import { Room, Team, Player, AuctionConfig, GameState, UserState, Action, LogEntry, Pot, UserProfile, AuctionArchive } from '../types';
 import { INITIAL_CONFIG, MOCK_PLAYERS } from '../constants';
 
-// Bump version to 'v16-debug' to isolate this test
-const APP_PREFIX = 'ipl-auction-v16-debug-';
+// Bump version to 'v17-stable' to force fresh IDs
+const APP_PREFIX = 'ipl-auction-v17-stable-';
 const HISTORY_KEY = 'ipl_auction_archive';
 const USER_KEY = 'ipl_user_profile';
 const ASSET_MARKER = '___HOST_ASSET___';
@@ -47,19 +47,25 @@ const shuffleByPot = (players: Player[]): Player[] => {
 };
 
 // --- UPDATED NETWORK CONFIG ---
-// Enhanced ICE servers to punch through symmetric NATs and firewalls
+// Targeting Ports 443/80/53 to bypass UAE/Strict Firewalls
 const PEER_CONFIG = {
     debug: 2, 
-    pingInterval: 5000, // Keep socket alive
+    pingInterval: 5000, 
     config: {
         iceServers: [
+            // Standard Google
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },      
+            // Port 443 (HTTPS) - Critical for Firewalls
+            { urls: 'stun:stun.nextcloud.com:443' },
+            { urls: 'stun:stun.piratenbrandenburg.de:443' },
+            // Port 80 (HTTP)
+            { urls: 'stun:stun.vodafone.ro:80' },
+            // Standard Fallbacks
             { urls: 'stun:global.stun.twilio.com:3478' },
-            { urls: 'stun:stun.services.mozilla.com' },
+            { urls: 'stun:stun.services.mozilla.com' }
             { urls: 'stun:stun.kytes.co' }
         ],
         sdpSemantics: 'unified-plan',
@@ -80,7 +86,7 @@ class RoomService {
 
     pingIntervalId: any = null;
     monitorIntervalId: any = null;
-    signalingKeepAliveId: any = null; // New Keep-Alive for Host
+    signalingKeepAliveId: any = null; 
     lastHostPing: number = 0;
     
     activeRoomId: string | null = null;
@@ -114,7 +120,6 @@ class RoomService {
         const size = getByteSize(payload);
         const sizeStr = formatBytes(size);
         
-        // Deep analysis of teams to check image sizes
         if (payload.teams) {
             const teamSizes = payload.teams.map((t: Team) => ({
                 id: t.id,
@@ -132,7 +137,7 @@ class RoomService {
         this.log('SYSTEM', 'Cleaning up resources...');
         this.stopHeartbeat();
         this.stopMonitor();
-        this.stopSignalingKeepAlive(); // Cleanup Host Keep-Alive
+        this.stopSignalingKeepAlive(); 
         this.connections.forEach(c => c.close());
         this.connections = [];
         if (this.hostConn) {
@@ -250,7 +255,7 @@ class RoomService {
             this.peer.on('open', (id) => {
                 this.log('HOST', `Peer Open. ID: ${id}`);
                 this.startHeartbeat(); 
-                this.startSignalingKeepAlive(); // Ensure Host stays visible in Signaling Server
+                this.startSignalingKeepAlive(); 
                 resolve({ room: this.currentRoom!, user: this.currentUser! });
             });
             
@@ -277,7 +282,6 @@ class RoomService {
         this.log('HOST', `Incoming connection from ${conn.peer}`);
         
         conn.on('open', () => {
-            // INSTRUMENTATION: Check Serialization Mode
             this.log('RCA_CONN', `Host Connected to ${conn.peer}. Serialization Mode: [${conn.serialization}]`);
             this.connections.push(conn);
         });
@@ -323,6 +327,7 @@ class RoomService {
 
     // --- Client Logic ---
 
+    // Enhanced Join Logic with Retry Mechanism
     async joinRoom(roomId: string, userProfile: UserProfile): Promise<{ room: Room | null, user: UserState }> {
         this.isHost = false;
         const userId = userProfile.id;
@@ -330,28 +335,48 @@ class RoomService {
         this.currentRoom = null; 
         this.activeRoomId = roomId.trim().toUpperCase();
 
-        if (this.peer) {
-            this.peer.destroy();
-        }
-        this.peer = new Peer(PEER_CONFIG);
+        const tryConnect = async (attempt: number): Promise<{ room: Room | null, user: UserState }> => {
+            if (this.peer) this.peer.destroy();
+            this.peer = new Peer(PEER_CONFIG);
 
-        return new Promise((resolve, reject) => {
-            this.log('CLIENT', `Initializing Peer to join ${this.activeRoomId}`);
+            return new Promise((resolve, reject) => {
+                let connectionTimeout: any;
 
-            this.peer!.on('open', (id) => {
-                this.connectToHost(this.activeRoomId!, userProfile)
-                    .then((data) => {
-                        this.startMonitor(this.activeRoomId!, userProfile);
-                        resolve(data);
-                    })
-                    .catch(reject);
+                const failAndRetry = async (err: any) => {
+                    clearTimeout(connectionTimeout);
+                    if (attempt < 3 && (err.type === 'peer-unavailable' || err.message?.includes('Could not connect'))) {
+                        this.warn('CLIENT', `Join attempt ${attempt} failed: ${err.type}. Retrying in 2s...`);
+                        await new Promise(r => setTimeout(r, 2000));
+                        resolve(tryConnect(attempt + 1));
+                    } else {
+                        reject(err);
+                    }
+                };
+
+                this.peer!.on('open', (id) => {
+                    this.log('CLIENT', `Peer Open. Attempt ${attempt}. Connecting to Host...`);
+                    this.connectToHost(this.activeRoomId!, userProfile)
+                        .then((data) => {
+                            clearTimeout(connectionTimeout);
+                            this.startMonitor(this.activeRoomId!, userProfile);
+                            resolve(data);
+                        })
+                        .catch(failAndRetry);
+                });
+
+                this.peer!.on('error', (err) => {
+                    this.error('CLIENT', `Peer Error: ${err.type}`, err);
+                    failAndRetry(err);
+                });
+
+                // Safety timeout for the entire handshake
+                connectionTimeout = setTimeout(() => {
+                    failAndRetry({ type: 'timeout', message: 'Handshake timeout' });
+                }, 15000);
             });
+        };
 
-            this.peer!.on('error', (err) => {
-                this.error('CLIENT', `Peer Error: ${err.type}`, err);
-                reject(err);
-            });
-        });
+        return tryConnect(1);
     }
 
     private connectToHost(roomId: string, user: UserProfile): Promise<{ room: Room | null, user: UserState }> {
@@ -364,10 +389,9 @@ class RoomService {
             const hostPeerId = `${APP_PREFIX}${roomId}`;
             
             // EXPLICITLY SETTING SERIALIZATION TO BINARY
-            // This is critical. 'json' crashes on large payloads.
             const conn = this.peer.connect(hostPeerId, {
                 reliable: true,
-                serialization: 'binary' // Force chunking support
+                serialization: 'binary' 
             });
 
             if (!conn) {
@@ -380,7 +404,7 @@ class RoomService {
                     conn.close();
                     reject(new Error("Connection timed out - Host unreachable"));
                 }
-            }, 10000);
+            }, 8000);
 
             let retryCount = 0;
             const retryInterval = setInterval(() => {
@@ -483,8 +507,6 @@ class RoomService {
         let room: Room = JSON.parse(JSON.stringify(this.currentRoom));
         let logs = [...room.gameState.logs];
 
-        // ... (Action Handling Logic is standard, keeping abbreviated for brevity as it's not the cause of the bug)
-        // Re-implementing key logic to ensure app works
         switch (action.type) {
             case 'JOIN':
                 if (!room.members.find(m => m.userId === action.payload.userId)) {
@@ -647,7 +669,7 @@ class RoomService {
                     this.peer.reconnect();
                 }
             }
-        }, 5000);
+        }, 3000); // Check more frequently (3s)
     }
 
     private stopSignalingKeepAlive() {
@@ -672,7 +694,7 @@ class RoomService {
 
             const conn = this.peer!.connect(`${APP_PREFIX}${roomId}`, { 
                 reliable: true,
-                serialization: 'binary' // Force binary on reconnect too
+                serialization: 'binary' 
             });
             
             if (conn) {

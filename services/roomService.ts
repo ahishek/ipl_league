@@ -446,6 +446,7 @@ class RoomService {
             this.attachIceMonitor(conn, 'CLIENT');
 
             // Internal timeout just for connection opening (distinct from the handshake timeout)
+            // Increased to 12s to allow slower hole-punching
             const timeout = setTimeout(() => {
                 if (!conn.open) {
                     conn.close();

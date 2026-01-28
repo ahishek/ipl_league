@@ -383,9 +383,15 @@ class RoomService {
 
                 const failAndRetry = async (err: any) => {
                     clearTimeout(connectionTimeout);
-                    if (attempt < 3 && (err.type === 'peer-unavailable' || err.message?.includes('Could not connect'))) {
-                        this.warn('CLIENT', `Join attempt ${attempt} failed: ${err.type}. Retrying in 2s...`);
-                        await new Promise(r => setTimeout(r, 2000));
+                    const shouldRetry = attempt < 4 && (
+                        err.type === 'peer-unavailable' || 
+                        err.type === 'timeout' || 
+                        err.message?.includes('Could not connect')
+                    );
+
+                    if (shouldRetry) {
+                        this.warn('CLIENT', `Join attempt ${attempt} failed (${err.type || 'Error'}). Retrying in 2.5s...`);
+                        await new Promise(r => setTimeout(r, 2500));
                         resolve(tryConnect(attempt + 1));
                     } else {
                         reject(err);
@@ -408,7 +414,7 @@ class RoomService {
                     failAndRetry(err);
                 });
 
-                // Safety timeout for the entire handshake
+                // Extended Timeout for NAT Traversal (15s)
                 connectionTimeout = setTimeout(() => {
                     failAndRetry({ type: 'timeout', message: 'Handshake timeout' });
                 }, 15000);
@@ -428,11 +434,9 @@ class RoomService {
             const hostPeerId = `${APP_PREFIX}${roomId}`;
             this.log('CLIENT_DIAG', `Connecting to Host Peer ID: ${hostPeerId}`);
             
-            // EXPLICITLY SETTING SERIALIZATION TO BINARY
-            const conn = this.peer.connect(hostPeerId, {
-                reliable: true,
-                serialization: 'binary' 
-            });
+            // REMOVED 'reliable: true' and 'serialization: binary'
+            // Using default config is more robust for strict NATs
+            const conn = this.peer.connect(hostPeerId);
 
             if (!conn) {
                 reject(new Error("Failed to create connection object"));
@@ -441,12 +445,13 @@ class RoomService {
             
             this.attachIceMonitor(conn, 'CLIENT');
 
+            // Internal timeout just for connection opening (distinct from the handshake timeout)
             const timeout = setTimeout(() => {
                 if (!conn.open) {
                     conn.close();
                     reject(new Error("Connection timed out - Host unreachable"));
                 }
-            }, 8000);
+            }, 12000);
 
             let retryCount = 0;
             const retryInterval = setInterval(() => {
@@ -738,10 +743,8 @@ class RoomService {
                 await new Promise<void>(resolve => this.peer!.on('open', () => resolve()));
             }
 
-            const conn = this.peer!.connect(`${APP_PREFIX}${roomId}`, { 
-                reliable: true,
-                serialization: 'binary' 
-            });
+            // REMOVED reliable:true from Reconnect too
+            const conn = this.peer!.connect(`${APP_PREFIX}${roomId}`);
             
             if (conn) {
                 this.setupClientConnection(conn);

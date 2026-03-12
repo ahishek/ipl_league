@@ -5,7 +5,13 @@ export const INITIAL_CONFIG: AuctionConfig = {
   totalBudget: 1500,
   maxPlayers: 15,
   bidTimerSeconds: 30,
-  minBidIncrement: 10, // 20 Lakhs/Units standard increment
+  minBidIncrement: 10,
+  roleMinimums: {
+    Batter: 4,
+    Bowler: 4,
+    'All Rounder': 2,
+    'Wicket Keeper': 1,
+  },
 };
 
 export const TEAM_COLORS = [
@@ -24,51 +30,61 @@ export const TEAM_COLORS = [
 export const MOCK_PLAYERS: Player[] = [
   { 
     id: '1', name: 'Virat Kohli', position: 'Batter', pot: 'A', basePrice: 200, status: 'PENDING', 
-    country: 'IND', stats: 'IPL Goat', iplTeam: 'RCB',
+    country: 'IND', iplTeam: 'RCB',
+    stats: { matches: 15, runs: 741, batAvg: 61.75, batStrikeRate: 154.7, wickets: 0, bowlStrikeRate: 0, economy: 0, bowlAvg: 0, historicalAuctionPrice: 2100 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/2.png'
   },
   { 
     id: '2', name: 'Rohit Sharma', position: 'Batter', pot: 'A', basePrice: 200, status: 'PENDING', 
-    country: 'IND', stats: 'Hitman', iplTeam: 'MI',
+    country: 'IND', iplTeam: 'MI',
+    stats: { matches: 14, runs: 417, batAvg: 32.08, batStrikeRate: 150.0, wickets: 0, bowlStrikeRate: 0, economy: 0, bowlAvg: 0, historicalAuctionPrice: 1600 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/6.png'
   },
   { 
     id: '3', name: 'Jasprit Bumrah', position: 'Bowler', pot: 'A', basePrice: 200, status: 'PENDING', 
-    country: 'IND', stats: 'Yorker King', iplTeam: 'MI',
+    country: 'IND', iplTeam: 'MI',
+    stats: { matches: 13, runs: 0, batAvg: 0, batStrikeRate: 0, wickets: 20, bowlStrikeRate: 12.1, economy: 6.48, bowlAvg: 15.8, historicalAuctionPrice: 1200 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/9.png'
   },
   { 
     id: '4', name: 'Travis Head', position: 'Batter', pot: 'A', basePrice: 200, status: 'PENDING', 
-    country: 'AUS', stats: 'Explosive Opener', iplTeam: 'SRH',
+    country: 'AUS', iplTeam: 'SRH',
+    stats: { matches: 15, runs: 567, batAvg: 40.5, batStrikeRate: 191.5, wickets: 0, bowlStrikeRate: 0, economy: 0, bowlAvg: 0, historicalAuctionPrice: 680 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/225.png'
   },
   { 
     id: '5', name: 'Rashid Khan', position: 'Bowler', pot: 'A', basePrice: 200, status: 'PENDING', 
-    country: 'AFG', stats: 'Spin Wizard', iplTeam: 'GT',
+    country: 'AFG', iplTeam: 'GT',
+    stats: { matches: 12, runs: 0, batAvg: 0, batStrikeRate: 0, wickets: 10, bowlStrikeRate: 17.2, economy: 8.4, bowlAvg: 24.1, historicalAuctionPrice: 1500 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/218.png'
   },
   { 
     id: '6', name: 'Ben Stokes', position: 'All Rounder', pot: 'B', basePrice: 150, status: 'PENDING', 
-    country: 'ENG', stats: 'Clutch Player', iplTeam: 'CSK' 
+    country: 'ENG', iplTeam: 'CSK',
+    stats: { matches: 2, runs: 15, batAvg: 7.5, batStrikeRate: 107.1, wickets: 0, bowlStrikeRate: 0, economy: 0, bowlAvg: 0, historicalAuctionPrice: 1625 },
   },
   { 
     id: '7', name: 'Hardik Pandya', position: 'All Rounder', pot: 'B', basePrice: 150, status: 'PENDING', 
-    country: 'IND', stats: 'Pace & Power', iplTeam: 'MI',
+    country: 'IND', iplTeam: 'MI',
+    stats: { matches: 14, runs: 216, batAvg: 18.0, batStrikeRate: 143.0, wickets: 11, bowlStrikeRate: 17.6, economy: 10.75, bowlAvg: 31.5, historicalAuctionPrice: 1500 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/54.png'
   },
   { 
     id: '9', name: 'KL Rahul', position: 'Wicket Keeper', pot: 'B', basePrice: 150, status: 'PENDING', 
-    country: 'IND', stats: 'Classy Bat', iplTeam: 'LSG',
+    country: 'IND', iplTeam: 'LSG',
+    stats: { matches: 14, runs: 520, batAvg: 37.1, batStrikeRate: 136.2, wickets: 0, bowlStrikeRate: 0, economy: 0, bowlAvg: 0, historicalAuctionPrice: 1700 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/19.png'
   },
   { 
     id: '11', name: 'Rinku Singh', position: 'Batter', pot: 'C', basePrice: 50, status: 'PENDING', 
-    country: 'IND', stats: 'Finisher', iplTeam: 'KKR',
+    country: 'IND', iplTeam: 'KKR',
+    stats: { matches: 15, runs: 302, batAvg: 46.4, batStrikeRate: 148.8, wickets: 0, bowlStrikeRate: 0, economy: 0, bowlAvg: 0, historicalAuctionPrice: 55 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/152.png'
   },
   { 
     id: '13', name: 'Matheesha Pathirana', position: 'Bowler', pot: 'C', basePrice: 50, status: 'PENDING', 
-    country: 'SL', stats: 'Baby Malinga', iplTeam: 'CSK',
+    country: 'SL', iplTeam: 'CSK',
+    stats: { matches: 13, runs: 0, batAvg: 0, batStrikeRate: 0, wickets: 13, bowlStrikeRate: 16.5, economy: 7.68, bowlAvg: 21.1, historicalAuctionPrice: 20 },
     imageUrl: 'https://documents.iplt20.com/ipl/IPLHeadshot2024/1014.png'
   },
 ];

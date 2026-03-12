@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Grotesk:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg-1: #06101d;
+  --bg-2: #0d1d32;
+  --panel: rgba(255, 255, 255, 0.07);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --text-main: #eef2ff;
+  --text-muted: #94a3b8;
+  --gold: #d4a44e;
+  --mint: #67d3c1;
+  --danger: #ff6b4a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(212, 164, 78, 0.14), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(103, 211, 193, 0.12), transparent 26%),
+    linear-gradient(160deg, var(--bg-1), #05080f 55%, #0b1220);
+  color: var(--text-main);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(212, 164, 78, 0.34);
+  color: #fff5dd;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 164, 78, 0.32);
+  border-radius: 999px;
+}
+
+.custom-scrollbar {
+  scrollbar-color: rgba(212, 164, 78, 0.38) transparent;
+}

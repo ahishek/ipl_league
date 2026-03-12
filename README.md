@@ -1,104 +1,212 @@
+# IPL Auction Command Centre
 
-# 🏏 IPL Mock Auctioneer
+A premium, live IPL-style auction platform for running multiplayer mock auctions with authoritative real-time sync, Google Sheets player imports, AI-assisted scouting and branding, and exportable post-auction summaries.
 
-A real-time, multiplayer cricket auction simulation platform powered by React, PeerJS, and Google Gemini AI.
+## Overview
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![React](https://img.shields.io/badge/React-19-blue)
-![Gemini AI](https://img.shields.io/badge/AI-Powered-purple)
+This project lets one host create an auction room and run a synchronized player auction for multiple franchise owners. The host controls the room, imports a player pool from Google Sheets, configures purse and roster rules, and conducts the auction live. Team owners join the room, register a franchise, track targets, place bids, and monitor every squad in real time.
 
-## 🌟 Overview
+The app now uses a backend-hosted authoritative room model with Socket.IO instead of peer-to-peer sync. That makes join/reconnect behavior more reliable and keeps all bidding and settlement logic consistent across geographies and networks.
 
-IPL Mock Auctioneer allows groups of friends or cricket enthusiasts to conduct their own fantasy player auctions. Unlike static tools, this application creates a live, synchronized room where a host controls the flow of players, and team owners place bids in real-time.
+## Feature Inventory
 
-The experience is enhanced by **Google Gemini AI**, which acts as a virtual branding agency (generating team logos), a scout (providing player stats), and a color commentator (reacting to sold/unsold players with the personality of legends like Ravi Shastri or Richie Benaud).
+### Host / Admin
 
-## ✨ Key Features
+- Create a live auction room and share a six-character invite code.
+- Configure total purse, max squad size, minimum bid increment, bid window, scheduled start time, and per-role minimums.
+- Preview and import player data from a public Google Sheet tab before starting the room.
+- Review a pre-flight auction confirmation screen before opening bidding.
+- Run the auction with pause/resume, sold, unsold, skip-to-next-player, undo-last-host-action, and early end controls.
+- Track live room health with connected member counts, room status, and recent activity logs.
+- Archive finished auctions automatically for later review.
+- Export finished auction summaries as CSV or JSON.
 
-### 🏢 Auction Hall (Lobby & Game)
-*   **Real-time Synchronization:** Built on PeerJS (WebRTC) for low-latency state syncing between host and participants without a dedicated backend.
-*   **Host Controls:** The host manages the timer, introduces players, and finalizes sales.
-*   **Bidding System:** Live budget tracking, roster limits (max 15 players), and incremental bidding logic.
-*   **Dynamic States:** Handles "Sold", "Unsold", and "Pause" states seamlessly.
+### Team Owners
 
-### 🤖 AI Integration (Google Gemini)
-*   **Live Commentary:** Generates witty, context-aware commentary based on the player's price and the buying team's status.
-*   **Scout Insights:** Provides key T20 stats and analysis for the player currently on the block.
-*   **Brand Generation:** Auto-generates professional vector-style logos for user-created teams based on their name and color.
+- Join any room with an invite code.
+- Register a franchise with team name, color, and optional AI-generated logo concepts.
+- Browse the full imported player pool in the lobby before the auction starts.
+- Search and filter players by name, pot, and role.
+- Maintain a private watchlist and private notes per player in the browser.
+- Follow live bidding, purse burn, squad composition, and roster gaps during the auction.
 
-### 👥 Team & Player Management
-*   **Roster Management:** Visualizes squad composition (Batters, Bowlers, ARs, WKs) and remaining purse.
-*   **CSV Import:** Hosts can import custom player lists via Google Sheets or CSV.
-*   **Archives:** Persists auction history to LocalStorage, allowing users to review past auction results and full squads.
+### Live Auction Experience
 
-### 🎨 UI/UX
-*   **Glassmorphism Design:** A modern, dark-themed UI with blurs and gradients.
-*   **Responsive:** Works on desktop and tablets.
-*   **Audio/Visual Cues:** Animations for bids and sales.
+- Server-authoritative room state broadcast to every connected client via Socket.IO.
+- Pot-based randomized player order within the imported pool.
+- Synchronized current player, current bid, sold/unsold decisions, and team budgets.
+- Automatic transition from lobby to live auction for connected room members.
+- Auto-advance after a player is settled.
+- Connection status indicator for clients.
+- Rich live player card with imported sheet metadata such as IPL team and stats.
+- Activity feed for system actions, bids, and AI commentary.
 
-## 🛠️ Tech Stack
+### Constraint and Purse Intelligence
 
-*   **Frontend:** React 19, TypeScript
-*   **Styling:** Tailwind CSS, Lucide React (Icons)
-*   **Networking:** PeerJS (P2P Data Connections)
-*   **AI:** Google GenAI SDK (`@google/genai`)
-*   **Build Tool:** Vite
+- Enforces bid increments server-side.
+- Prevents bids that exceed remaining purse.
+- Prevents bids that would make a legal squad impossible to complete.
+- Tracks minimum purse reserve required for each franchise to finish a valid squad.
+- Shows missing role targets such as WK / Batter / Bowler / AR gaps on team cards.
+- Highlights budget-risk states when a squad is at risk of becoming non-completable.
 
-## 🚀 Getting Started
+### AI Features
+
+- AI-generated team logo concepts for franchise creation.
+- Gemini scout summaries for the player currently on the block.
+- Gemini commentary snippets for sold and unsold outcomes.
+- AI runs server-side so API keys are not exposed to the browser.
+
+### Archives and Summary
+
+- Finished rooms are archived on the server and exposed back to the client dashboard.
+- Archive detail view shows every franchise, acquired squad, and final purse.
+- Export buttons generate machine-friendly CSV and JSON summaries.
+
+## Architecture
+
+### Frontend
+
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS
+- Lucide icons
+
+### Backend
+
+- Express
+- Socket.IO
+- Server-side Google Sheets CSV ingestion
+- Server-side Gemini integrations
+
+### State Model
+
+- Active rooms are authoritative on the server.
+- Room state is kept in memory for active auctions.
+- Auction archives are persisted to `data/archives.json`.
+- Team logos generated by Gemini are cached server-side and fetched by clients on demand.
+
+## Product Flow
+
+1. Login with a profile name.
+2. Host creates a room or an owner joins via invite code.
+3. Host configures purse, squad rules, and timing.
+4. Host imports the player pool from Google Sheets.
+5. Owners register franchises and optionally generate AI logos.
+6. Everyone uses the lobby browser to search players, mark watchlists, and add notes.
+7. Host starts the auction from the confirmation screen.
+8. Owners bid live while the host settles each player as sold, unsold, or skipped.
+9. The room finishes manually or after the player pool is exhausted.
+10. Final squads are archived and exportable.
+
+## Google Sheets Import
+
+The app supports importing a public Google Sheet tab as the player source of truth.
+
+Current sample default:
+
+- Sheet URL: `https://docs.google.com/spreadsheets/d/1n4wZ_KymT8Njo4wBojJM_B0XO7K5H6j_XIaNxVcypT8/edit?usp=sharing`
+- Tab: `Copy of All Players Data`
+
+Imported fields are normalized into player records including:
+
+- name
+- role / position
+- pot
+- base price
+- image URL
+- IPL team
+- country
+- matches / runs / wickets / averages / strike rates / economy
+- historical auction price
+
+## Local Development
 
 ### Prerequisites
-*   Node.js (v18 or higher)
-*   A Google Cloud Project with the **Gemini API** enabled.
 
-### Installation
+- Node.js 18+
+- npm
+- Optional Gemini API key for AI features
 
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/yourusername/ipl-mock-auctioneer.git
-    cd ipl-mock-auctioneer
-    ```
+### Environment
 
-2.  **Install dependencies**
-    ```bash
-    npm install
-    ```
+Create `.env` in the repo root:
 
-3.  **Configure Environment**
-    Create a `.env` file in the root directory and add your Google Gemini API Key:
-    ```env
-    VITE_GEMINI_API_KEY=your_actual_api_key_here
-    ```
+```env
+GEMINI_API_KEY=your_key_here
+PORT=8787
+```
 
-4.  **Run Locally**
-    ```bash
-    npm run dev
-    ```
+The frontend talks to the backend automatically using the current origin in production or `http://127.0.0.1:8787` in local development.
 
-## 📖 How to Use
+### Install
 
-1.  **Login:** Enter your name to create a user profile.
-2.  **Dashboard:**
-    *   **Host:** Click "Host Room", enter a session name, and share the **Invite Code**.
-    *   **Join:** Enter an Invite Code to join an existing lobby.
-3.  **Lobby:**
-    *   Create your Franchise (Team Name + Color).
-    *   Use the "Generate Logos" button to let AI create your badge.
-    *   Wait for the Host to start the game.
-4.  **The Auction:**
-    *   **Host:** Controls the flow (Next Player, Sold, Unsold).
-    *   **Bidders:** Click bid buttons to place offers. Watch your budget!
-5.  **Archives:** After the auction ends, view the full summary and squads in the Archive tab.
+```bash
+npm install
+```
 
-## 🤝 Contributing
+### Run the full stack
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```bash
+npm run dev
+```
 
-1.  Fork the Project
-2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4.  Push to the Branch (`git push origin feature/AmazingFeature`)
-5.  Open a Pull Request
+This starts:
 
-## 📄 License
+- Vite client on `http://127.0.0.1:4173`
+- Express + Socket.IO server on `http://127.0.0.1:8787`
 
-Distributed under the MIT License.
+### Production-style local run
+
+```bash
+npm run build
+npm run start
+```
+
+## Scripts
+
+- `npm run dev` - start client and server together
+- `npm run dev:client` - start the Vite frontend only
+- `npm run dev:server` - start the backend only
+- `npm run build` - typecheck and build/validate client and server
+- `npm run start` - run the production server entry
+- `npm run smoke:sync` - run the real-time synchronization smoke test
+
+## Verification
+
+The current implementation has been exercised with:
+
+- `npm run build`
+- `npm run smoke:sync`
+- Manual browser verification of:
+  - room creation and join
+  - Google Sheets preview/import
+  - AI logo generation
+  - auction start confirmation
+  - richer live player card
+  - Gemini scout insights
+  - skip and undo host controls
+  - completed summary screen and export actions
+
+## Repository Structure
+
+- `App.tsx` - primary UI and interaction flow
+- `auctionInsights.ts` - squad constraint and purse intelligence helpers
+- `auctionExports.ts` - CSV / JSON summary export helpers
+- `server/index.ts` - API + Socket.IO server bootstrap
+- `server/roomManager.ts` - authoritative room state machine
+- `server/sheets.ts` - Google Sheets ingestion and normalization
+- `server/gemini.ts` - server-side Gemini integrations
+- `services/roomService.ts` - client transport layer
+- `scripts/syncSmoke.ts` - multi-client synchronization smoke test
+
+## Current Constraints
+
+- Active room state is still single-process in-memory, so horizontal scaling and durable reconnect recovery are future work.
+- Archives are persisted, but active auctions are not yet backed by a database or distributed room actor.
+- Private watchlists and notes are browser-local, not account-synced.
+
+## Next Backend/Hosting Step
+
+For production hardening, the next logical step is moving active room state to a durable backend layer so reconnects, failover, and multi-instance hosting are fully resilient.

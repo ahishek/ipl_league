@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { 
   Play, Pause, SkipForward, Settings, Gavel, Users, Activity, Trophy, User, Plus,
   CheckCircle, XCircle, Download, Copy, LogOut, ArrowRight, Loader2, AlertCircle, 
@@ -9,9 +9,22 @@ import {
   Mic, Shield, BarChart3
 } from 'lucide-react';
 import { Player, Team, Room, UserState, Pot, Position, UserProfile, AuctionArchive } from './types';
+import {
+  buildTeamConstraintState,
+  evaluateBidCapacity,
+  getPendingPlayers,
+  getRoleCounts,
+  getRoleShortLabel,
+} from './auctionInsights';
+import { createAuctionExportFiles } from './auctionExports';
 import { TEAM_COLORS } from './constants';
-import { generateAuctionCommentary, generateUnsoldCommentary, getPlayerInsights, generateTeamLogo } from './services/geminiService';
+import { getPlayerInsights, generateTeamLogo } from './services/geminiService';
 import { roomService } from './services/roomService';
+import { getServerOrigin } from './services/serverOrigin';
+
+const DEFAULT_SHEET_URL =
+  'https://docs.google.com/spreadsheets/d/1n4wZ_KymT8Njo4wBojJM_B0XO7K5H6j_XIaNxVcypT8/edit?usp=sharing';
+const DEFAULT_SHEET_TAB = 'Copy of All Players Data';
 
 // --- Helper Components ---
 
@@ -21,8 +34,8 @@ interface BackgroundWrapperProps {
 
 const BackgroundWrapper: React.FC<BackgroundWrapperProps> = ({ children }) => (
     <div className="h-screen bg-[#050505] text-white selection:bg-yellow-500/30 overflow-hidden relative font-sans flex flex-col">
-        <div className="fixed top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
-        <div className="fixed bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
+        <div className="fixed top-[-10%] left-[-10%] w-[50%] h-[50%] bg-cyan-500/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
+        <div className="fixed bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-amber-500/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
         <div className="relative z-10 w-full h-full flex flex-col flex-1 overflow-hidden">{children}</div>
     </div>
 );
@@ -31,79 +44,8 @@ const GlassCard: React.FC<{children?: React.ReactNode; className?: string; onCli
     <div onClick={onClick} className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl shadow-xl transition-all duration-300 ${className}`}>{children}</div>
 );
 
-/**
- * Enhanced CSV Parser with Robust Mapping and Normalization
- */
-const parseCSVData = (csv: string): Player[] => {
-  const lines = csv.split('\n').map(l => l.trim()).filter(l => l);
-  if (lines.length < 2) return [];
-
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
-  
-  let nameIdx = -1, posIdx = -1, potIdx = -1, priceIdx = -1, imgIdx = -1, teamIdx = -1, countryIdx = -1;
-
-  headers.forEach((h, i) => {
-      if (h === 'player' || h.includes('name')) nameIdx = i;
-      else if (h === 'role' || h.includes('pos') || h === 'type') posIdx = i;
-      else if (h === 'pool' || h === 'pot' || h.includes('set') || h === 'category') potIdx = i;
-      else if (h === 'base price' || h === 'base_price' || h === 'reserve price' || h === 'price') priceIdx = i;
-      else if (h === 'image' || h === 'photo' || h.includes('url') || h === 'img') imgIdx = i;
-      else if (h === 'team' || h === 'ipl team' || h.includes('franchise')) teamIdx = i;
-      else if (h === 'country' || h === 'nation') countryIdx = i;
-  });
-
-  if (priceIdx === -1) {
-     headers.forEach((h, i) => { if (h.includes('price') || h.includes('amount') || h.includes('value') || h.includes('cost')) priceIdx = i; });
-  }
-
-  return lines.slice(1).map((line, idx) => {
-    const rawCols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-    const cols = rawCols.map(c => c.trim().replace(/^"|"$/g, '').trim());
-    const getVal = (i: number) => (i >= 0 && i < cols.length ? cols[i] : "");
-
-    const p: any = { 
-      id: `imp-${Date.now()}-${idx}`, 
-      status: 'PENDING',
-      name: getVal(nameIdx) || 'Unknown Player',
-      position: 'Batter' as Position,
-      pot: 'Uncategorized' as Pot,
-      basePrice: 0,
-      imageUrl: getVal(imgIdx),
-      iplTeam: getVal(teamIdx),
-      country: getVal(countryIdx)
-    };
-
-    const rawRole = getVal(posIdx).toLowerCase();
-    if (rawRole.includes('bat')) p.position = 'Batter';
-    else if (rawRole.includes('bowl')) p.position = 'Bowler';
-    else if (rawRole.includes('ar') || rawRole.includes('all') || rawRole.includes('round')) p.position = 'All Rounder';
-    else if (rawRole.includes('wk') || rawRole.includes('keep')) p.position = 'Wicket Keeper';
-
-    const rawPot = getVal(potIdx).toUpperCase();
-    if (rawPot === 'A' || rawPot.includes('POOL A') || rawPot.includes('SET 1')) p.pot = 'A';
-    else if (rawPot === 'B' || rawPot.includes('POOL B') || rawPot.includes('SET 2')) p.pot = 'B';
-    else if (rawPot === 'C' || rawPot.includes('POOL C') || rawPot.includes('SET 3')) p.pot = 'C';
-    else if (rawPot === 'D' || rawPot.includes('POOL D') || rawPot.includes('SET 4')) p.pot = 'D';
-    else if (['A', 'B', 'C', 'D'].includes(rawPot.replace(/[^A-D]/g, ''))) p.pot = rawPot.replace(/[^A-D]/g, '') as Pot;
-    
-    const rawPrice = getVal(priceIdx);
-    if (rawPrice) {
-        const lowerVal = rawPrice.toLowerCase();
-        let multiplier = 1;
-        if (lowerVal.includes('cr') || lowerVal.includes('crore')) multiplier = 100;
-        else if (lowerVal.includes('lakh') || lowerVal.includes('lac')) multiplier = 1;
-        const cleanVal = rawPrice.replace(/,/g, '').trim();
-        const numMatch = cleanVal.match(/[0-9.]+/);
-        if (numMatch) {
-            const num = parseFloat(numMatch[0]);
-            p.basePrice = Math.round(num * multiplier);
-        }
-    }
-    return p as Player;
-  }).filter(p => p.name && p.name !== 'Unknown Player');
-};
-
 export default function App() {
+  const API_BASE_URL = getServerOrigin();
   const [view, setView] = useState<'LOGIN' | 'HOME' | 'LOBBY' | 'GAME' | 'COMPLETED' | 'ARCHIVE_DETAIL'>('LOGIN');
   const viewRef = useRef(view);
   const [isLoading, setIsLoading] = useState(false);
@@ -114,6 +56,7 @@ export default function App() {
   const [room, setRoom] = useState<Room | null>(null);
   const [archive, setArchive] = useState<AuctionArchive[]>([]);
   const [selectedArchive, setSelectedArchive] = useState<AuctionArchive | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState('idle');
 
   const [hostRoomName, setHostRoomName] = useState("");
   const [joinRoomCode, setJoinRoomCode] = useState("");
@@ -143,10 +86,11 @@ export default function App() {
   const [showStartConfirm, setShowStartConfirm] = useState(false);
   const [viewPlayerPool, setViewPlayerPool] = useState(false);
 
-  const [sheetUrl, setSheetUrl] = useState("");
-  const [sheetName, setSheetName] = useState("Sheet1");
+  const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
+  const [sheetName, setSheetName] = useState(DEFAULT_SHEET_TAB);
   const [isFetchingSheet, setIsFetchingSheet] = useState(false);
   const [fetchedPreview, setFetchedPreview] = useState<Player[]>([]);
+  const deferredLobbySearch = useDeferredValue(lobbySearch);
 
   const isHost = currentUser?.isAdmin || false;
   const myTeam = room?.teams.find(t => t.controlledByUserId === profile?.id);
@@ -162,6 +106,79 @@ export default function App() {
     return room?.players.filter(p => p.status === 'SOLD').length || 0;
   }, [room?.players]);
 
+  const currentPlayer = useMemo(
+    () => room?.players.find((player) => player.id === room.gameState.currentPlayerId) || null,
+    [room?.players, room?.gameState.currentPlayerId],
+  );
+
+  const currentBidTeam = useMemo(
+    () => room?.teams.find((team) => team.id === room.gameState.currentBid?.teamId) || null,
+    [room?.teams, room?.gameState.currentBid?.teamId],
+  );
+
+  const connectedMembers = useMemo(
+    () => room?.members.filter((member) => member.connected).length || 0,
+    [room?.members],
+  );
+
+  const roleTargets = useMemo(
+    () => room ? (Object.entries(room.config.roleMinimums) as Array<[Position, number]>) : [],
+    [room?.config.roleMinimums],
+  );
+
+  const viewTeamRoleCounts = useMemo(
+    () => (viewTeamRoster ? getRoleCounts(viewTeamRoster.roster) : null),
+    [viewTeamRoster],
+  );
+
+  const pendingAuctionPlayers = useMemo(
+    () => room ? getPendingPlayers(room.players) : [],
+    [room?.players],
+  );
+
+  const filteredLobbyPlayers = useMemo(() => {
+    if (!room) return [];
+    return room.players.filter((player) => {
+      const matchesSearch = player.name.toLowerCase().includes(deferredLobbySearch.toLowerCase());
+      const matchesPot = lobbyFilterPot === 'ALL' || player.pot === lobbyFilterPot;
+      const matchesRole = lobbyFilterRole === 'ALL' || player.position === lobbyFilterRole;
+      return matchesSearch && matchesPot && matchesRole;
+    });
+  }, [deferredLobbySearch, lobbyFilterPot, lobbyFilterRole, room?.players]);
+
+  const currentPlayerKeyStats = useMemo(() => {
+    if (!currentPlayer?.stats) return [];
+
+    const stats = currentPlayer.stats;
+    return [
+      { label: 'Matches', value: stats.matches > 0 ? `${stats.matches}` : null },
+      { label: 'Runs', value: stats.runs > 0 ? `${stats.runs}` : null },
+      { label: 'Bat SR', value: stats.batStrikeRate > 0 ? stats.batStrikeRate.toFixed(1) : null },
+      { label: 'Wickets', value: stats.wickets > 0 ? `${stats.wickets}` : null },
+      { label: 'Economy', value: stats.economy > 0 ? stats.economy.toFixed(2) : null },
+      { label: 'Auction', value: stats.historicalAuctionPrice > 0 ? `${stats.historicalAuctionPrice}L` : null },
+    ].filter((entry) => entry.value).slice(0, 4);
+  }, [currentPlayer]);
+
+  const downloadTextFile = (filename: string, text: string, mimeType: string) => {
+    const blob = new Blob([text], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportSummary = (source: Room | AuctionArchive, format: 'csv' | 'json') => {
+    const files = createAuctionExportFiles(source);
+    if (format === 'csv') {
+      downloadTextFile(`${files.filenameBase}.csv`, files.csv, 'text/csv;charset=utf-8');
+      return;
+    }
+    downloadTextFile(`${files.filenameBase}.json`, files.json, 'application/json;charset=utf-8');
+  };
+
   // Sync ref
   useEffect(() => { viewRef.current = view; }, [view]);
 
@@ -169,8 +186,8 @@ export default function App() {
     const saved = roomService.getUserProfile();
     if (saved) {
       setProfile(saved);
-      setArchive(roomService.getArchive());
       setView('HOME');
+      roomService.refreshArchive(saved.id).then(setArchive).catch(() => setArchive(roomService.getArchive()));
     } else {
       setView('LOGIN');
     }
@@ -186,24 +203,55 @@ export default function App() {
     }
   }, [currentUser]);
 
+  useEffect(() => {
+    return roomService.subscribeStatus(setConnectionStatus);
+  }, []);
+
+  useEffect(() => {
+    if (!room?.id || !profile?.id) return;
+    const key = `ipl_private_room_state:${room.id}:${profile.id}`;
+    const saved = localStorage.getItem(key);
+    if (!saved) {
+      setWatchlist([]);
+      setPrivateNotes({});
+      return;
+    }
+    try {
+      const parsed = JSON.parse(saved) as { watchlist?: string[]; privateNotes?: Record<string, string> };
+      setWatchlist(parsed.watchlist || []);
+      setPrivateNotes(parsed.privateNotes || {});
+    } catch {
+      setWatchlist([]);
+      setPrivateNotes({});
+    }
+  }, [room?.id, profile?.id]);
+
+  useEffect(() => {
+    if (!room?.id || !profile?.id) return;
+    const key = `ipl_private_room_state:${room.id}:${profile.id}`;
+    localStorage.setItem(key, JSON.stringify({ watchlist, privateNotes }));
+  }, [watchlist, privateNotes, room?.id, profile?.id]);
+
   // View Transition Logic: Reactive to Room State
   useEffect(() => {
      if (room) {
         const currentView = viewRef.current;
         if (room.status === 'ACTIVE' && currentView === 'LOBBY') {
-             console.log("APP: Auto-switching to GAME view");
              setView('GAME');
         } else if (room.status === 'COMPLETED' && currentView !== 'COMPLETED' && currentView !== 'ARCHIVE_DETAIL') {
             setView('COMPLETED');
-            setArchive(roomService.getArchive()); 
+            if (profile) {
+              roomService.refreshArchive(profile.id).then(setArchive).catch(() => setArchive(roomService.getArchive()));
+            }
         }
      }
-  }, [room]);
+  }, [room, profile]);
 
   const handleLogin = () => {
     if (!loginName.trim()) return;
     const p = roomService.saveUserProfile(loginName.trim());
     setProfile(p);
+    roomService.refreshArchive(p.id).then(setArchive).catch(() => setArchive(roomService.getArchive()));
     setView('HOME');
   };
 
@@ -211,11 +259,10 @@ export default function App() {
     localStorage.removeItem('ipl_user_profile');
     setProfile(null);
     setCurrentUser(null);
+    setRoom(null);
+    window.history.replaceState({}, '', window.location.pathname);
     setView('LOGIN');
-    if (roomService.peer) {
-        roomService.peer.destroy();
-        roomService.peer = null;
-    }
+    roomService.cleanup();
   };
 
   const handleCreateRoom = async () => {
@@ -225,6 +272,7 @@ export default function App() {
         const { room, user } = await roomService.createRoom(profile, hostRoomName);
         setCurrentUser(user);
         setRoom(room);
+        window.history.replaceState({}, '', `${window.location.pathname}?room=${room.id}`);
         setView('LOBBY');
     } catch (e) { alert("Failed to host."); } 
     finally { setIsLoading(false); }
@@ -238,6 +286,7 @@ export default function App() {
         if (!room) throw new Error("No data");
         setCurrentUser(user);
         setRoom(room);
+        window.history.replaceState({}, '', `${window.location.pathname}?room=${room.id}`);
         if (room.status === 'ACTIVE') setView('GAME');
         else if (room.status === 'COMPLETED') setView('COMPLETED');
         else setView('LOBBY');
@@ -256,11 +305,11 @@ export default function App() {
                  teamId: myTeam.id, 
                  updates: { 
                      name: newTeamName, 
-                     color: newTeamColor, 
-                     logoUrl: selectedLogoUrl || myTeam.logoUrl 
-                 } 
+                     color: newTeamColor
+                 },
+                 logoDataUrl: selectedLogoUrl || undefined,
              } 
-         });
+         }).catch((error) => alert(error instanceof Error ? error.message : 'Failed to update team.'));
          setIsEditingTeam(false);
     } else {
         const existingTeam = room.teams.find(t => t.controlledByUserId === profile.id);
@@ -276,10 +325,15 @@ export default function App() {
             budget: room.config.totalBudget,
             roster: [],
             color: newTeamColor,
-            logoUrl: selectedLogoUrl || undefined,
             controlledByUserId: profile.id
         };
-        roomService.dispatch({ type: 'ADD_TEAM', payload: team });
+        roomService.dispatch({
+          type: 'ADD_TEAM',
+          payload: {
+            team,
+            logoDataUrl: selectedLogoUrl || undefined,
+          },
+        }).catch((error) => alert(error instanceof Error ? error.message : 'Failed to add team.'));
     }
     setTimeout(() => setIsLoading(false), 800);
   };
@@ -308,15 +362,28 @@ export default function App() {
   };
 
   const handleStartGame = () => {
-      // Send START_GAME first
-      roomService.dispatch({ type: 'START_GAME', payload: {} });
-      // Wait longer before sending the first player to ensure clients have transitioned to Game View
-      setTimeout(() => roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} }), 1000);
+      roomService.dispatch({ type: 'START_GAME', payload: {} }).catch((error) => {
+          alert(error instanceof Error ? error.message : 'Failed to start auction.');
+      });
   };
 
   const handleEndGame = () => {
-      roomService.dispatch({ type: 'END_GAME', payload: {} });
+      roomService.dispatch({ type: 'END_GAME', payload: {} }).catch((error) => {
+          alert(error instanceof Error ? error.message : 'Failed to end auction.');
+      });
       setShowEndConfirm(false);
+  };
+
+  const handleUndoLastAction = () => {
+      roomService.dispatch({ type: 'UNDO_LAST_ACTION', payload: {} }).catch((error) => {
+          alert(error instanceof Error ? error.message : 'Nothing to undo.');
+      });
+  };
+
+  const handleNextPlayer = () => {
+      roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} }).catch((error) => {
+          alert(error instanceof Error ? error.message : 'Could not advance to the next player.');
+      });
   };
 
   const handleSold = async () => {
@@ -326,22 +393,14 @@ export default function App() {
      
      setIsActionLoading(true);
      const player = r.players.find(p => p.id === r.gameState.currentPlayerId);
-     const team = r.teams.find(t => t.id === r.gameState.currentBid?.teamId);
-     const bidAmount = r.gameState.currentBid.amount;
      
-     if(player && team) {
-         if (!r.gameState.isPaused) roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} });
-         roomService.dispatch({ type: 'SOLD', payload: { commentary: undefined } });
-
-         generateAuctionCommentary(player, team, bidAmount, r.teams).then(commentary => {
-             if (commentary) roomService.dispatch({ type: 'ADD_LOG', payload: { message: commentary, type: 'AI' } });
-         });
-
-         setTimeout(() => {
-            roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} });
-            setIsActionLoading(false);
-            setPlayerInsights("");
-         }, 2500);
+     if(player) {
+         roomService.dispatch({ type: 'SOLD', payload: {} })
+            .catch((error) => alert(error instanceof Error ? error.message : 'Failed to settle sale.'))
+            .finally(() => {
+              setIsActionLoading(false);
+              setPlayerInsights("");
+            });
      } else {
          setIsActionLoading(false);
      }
@@ -356,18 +415,12 @@ export default function App() {
       const player = r.players.find(p => p.id === r.gameState.currentPlayerId);
       
       if (player) {
-          if (!r.gameState.isPaused) roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} });
-          roomService.dispatch({ type: 'UNSOLD', payload: { commentary: undefined } });
-
-          generateUnsoldCommentary(player).then(commentary => {
-              if (commentary) roomService.dispatch({ type: 'ADD_LOG', payload: { message: commentary, type: 'AI' } });
-          });
-
-          setTimeout(() => {
-              roomService.dispatch({ type: 'NEXT_PLAYER', payload: {} });
+          roomService.dispatch({ type: 'UNSOLD', payload: {} })
+            .catch((error) => alert(error instanceof Error ? error.message : 'Failed to mark player unsold.'))
+            .finally(() => {
               setIsActionLoading(false);
               setPlayerInsights("");
-          }, 2000);
+            });
       } else {
           setIsActionLoading(false);
       }
@@ -385,41 +438,33 @@ export default function App() {
   };
 
   const placeBid = (teamId: string, amount: number) => {
-      roomService.dispatch({ type: 'BID', payload: { teamId, amount } });
+      roomService.dispatch({ type: 'BID', payload: { teamId, amount } }).catch((error) => {
+          alert(error instanceof Error ? error.message : 'Bid failed.');
+      });
   };
 
   const togglePause = () => {
-      roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} });
+      roomService.dispatch({ type: 'TOGGLE_PAUSE', payload: {} }).catch((error) => {
+          alert(error instanceof Error ? error.message : 'Pause toggle failed.');
+      });
   };
 
   const handleFetchFromSheet = async () => {
     if (!sheetUrl) return alert("Enter URL");
     setIsFetchingSheet(true);
-    const matches = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-    const sheetId = matches ? matches[1] : null;
-    if (!sheetId) { setIsFetchingSheet(false); return alert("Invalid URL"); }
     try {
-        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
-        const res = await fetch(url);
-        const text = await res.text();
-        const p = parseCSVData(text);
-        if (p.length > 0) {
-            setFetchedPreview(p);
-        } else {
-            alert("No players found in this sheet. Ensure headers include 'Name', 'Pool', 'Role' and 'Base Price'.");
+        const res = await fetch(`${API_BASE_URL}/api/sheets/preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sheetUrl, sheetName }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Fetch failed.');
         }
+        setFetchedPreview(data.players || []);
     } catch (e) { alert("Fetch failed. Ensure the sheet is Public."); }
     finally { setIsFetchingSheet(false); }
-  };
-
-  const getFilteredLobbyPlayers = () => {
-    if (!room) return [];
-    return room.players.filter(p => {
-        const matchesSearch = p.name.toLowerCase().includes(lobbySearch.toLowerCase());
-        const matchesPot = lobbyFilterPot === 'ALL' || p.pot === lobbyFilterPot;
-        const matchesRole = lobbyFilterRole === 'ALL' || p.position === lobbyFilterRole;
-        return matchesSearch && matchesPot && matchesRole;
-    });
   };
 
   const toggleWatchlist = (id: string) => {
@@ -458,7 +503,7 @@ export default function App() {
                                    <div className="bg-blue-500/20 p-3 rounded-xl text-blue-400"><Users size={20}/></div>
                                    <div>
                                        <h3 className="font-bold text-white">Multiplayer</h3>
-                                       <p className="text-xs text-gray-500">Real-time P2P Sync</p>
+                                       <p className="text-xs text-gray-500">Authoritative live sync</p>
                                    </div>
                                </div>
                                <div className="bg-white/5 border border-white/5 p-4 rounded-2xl flex items-center gap-4 hover:bg-white/10 transition-colors">
@@ -524,7 +569,7 @@ export default function App() {
                           </div>
                           
                           <p className="text-center text-xs text-gray-600 font-medium pt-8">
-                              Powered by Gemini 2.5 • PeerJS • React
+                              Powered by Gemini 2.5 • Socket.IO • React
                           </p>
                       </div>
                   </div>
@@ -575,6 +620,14 @@ export default function App() {
                     <Trophy size={60} className="text-yellow-500 mb-4" fill="currentColor"/>
                     <h1 className="text-4xl font-display font-bold text-white mb-2 uppercase tracking-tight">{selectedArchive.roomName}</h1>
                     <p className="text-gray-500 text-sm font-medium uppercase tracking-widest">Auction Completed on {new Date(selectedArchive.completedAt).toLocaleDateString()}</p>
+                    <div className="mt-6 flex flex-wrap justify-center gap-3">
+                        <button onClick={() => handleExportSummary(selectedArchive, 'csv')} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-all hover:bg-white/10">
+                            Export CSV
+                        </button>
+                        <button onClick={() => handleExportSummary(selectedArchive, 'json')} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-all hover:bg-white/10">
+                            Export JSON
+                        </button>
+                    </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 w-full">
                     {teamsToDisplay.map(t => {
@@ -652,28 +705,57 @@ export default function App() {
                     </div>
                     <button onClick={() => { setLobbySearch(""); setLobbyFilterPot("ALL"); setLobbyFilterRole("ALL"); }} className="flex items-center gap-2 text-[10px] font-bold text-gray-500 hover:text-white transition-all uppercase tracking-widest self-end mr-2"><RefreshCcw size={12}/> Reset Browser</button>
                   </div>
-                  <div className="space-y-3">{getFilteredLobbyPlayers().map(p => (<div key={p.id} className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-3 hover:border-white/10 transition-all group"><div className="flex justify-between items-center"><div className="flex items-center gap-4"><div className="w-10 h-10 bg-gray-800 rounded-full border border-white/10 overflow-hidden flex items-center justify-center relative">{p.imageUrl && (<img src={p.imageUrl} className="w-full h-full object-cover absolute inset-0 z-10" loading="lazy" onError={(e) => e.currentTarget.style.display = 'none'} />)}<User className="text-gray-600 relative z-0" size={20}/></div><div><h4 className="font-bold text-white text-sm flex items-center gap-2">{p.name} {p.status !== 'PENDING' && <span className={`text-[8px] px-1.5 py-0.5 rounded ${p.status === 'SOLD' ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'}`}>{p.status}</span>}</h4><div className="flex items-center gap-2"><span className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">{p.position}</span><span className="text-[9px] text-yellow-500 font-bold">Pot {p.pot || 'N/A'}</span></div></div></div><div className="flex items-center gap-3"><span className="text-xs font-mono font-bold text-white">{p.basePrice || 0} L</span><button onClick={() => toggleWatchlist(p.id)} className={`p-2 rounded-lg transition-all ${watchlist.includes(p.id) ? 'text-pink-500' : 'text-gray-500 hover:text-pink-400'}`}><Star size={16} fill={watchlist.includes(p.id) ? "currentColor" : "none"}/></button><button onClick={() => { setEditingNotePlayerId(p.id); setTempNoteValue(privateNotes[p.id] || ""); }} className={`p-2 rounded-lg transition-all ${privateNotes[p.id] ? 'text-yellow-500' : 'text-gray-500 hover:text-white'}`}><FileText size={16}/></button></div></div>{editingNotePlayerId === p.id && (<div className="bg-black/40 p-3 rounded-xl border border-white/10"><textarea autoFocus value={tempNoteValue} onChange={e => setTempNoteValue(e.target.value)} className="w-full bg-transparent text-xs text-white focus:outline-none min-h-[50px]" placeholder="Add your private notes..." /><div className="flex justify-end gap-3 mt-2"><button onClick={() => setEditingNotePlayerId(null)} className="text-[9px] font-bold text-gray-500 uppercase">Cancel</button><button onClick={() => savePrivateNote(p.id)} className="bg-yellow-600 text-white px-3 py-1 rounded-lg text-[9px] font-bold">Save Note</button></div></div>)}</div>))}</div></div>)}</div></GlassCard></div>
+                  <div className="space-y-3">{filteredLobbyPlayers.map(p => (<div key={p.id} className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-3 hover:border-white/10 transition-all group"><div className="flex justify-between items-center"><div className="flex items-center gap-4"><div className="w-10 h-10 bg-gray-800 rounded-full border border-white/10 overflow-hidden flex items-center justify-center relative">{p.imageUrl && (<img src={p.imageUrl} className="w-full h-full object-cover absolute inset-0 z-10" loading="lazy" onError={(e) => e.currentTarget.style.display = 'none'} />)}<User className="text-gray-600 relative z-0" size={20}/></div><div><h4 className="font-bold text-white text-sm flex items-center gap-2">{p.name} {p.status !== 'PENDING' && <span className={`text-[8px] px-1.5 py-0.5 rounded ${p.status === 'SOLD' ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'}`}>{p.status}</span>}</h4><div className="flex items-center gap-2"><span className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">{p.position}</span><span className="text-[9px] text-yellow-500 font-bold">Pot {p.pot || 'N/A'}</span></div></div></div><div className="flex items-center gap-3"><span className="text-xs font-mono font-bold text-white">{p.basePrice || 0} L</span><button onClick={() => toggleWatchlist(p.id)} className={`p-2 rounded-lg transition-all ${watchlist.includes(p.id) ? 'text-pink-500' : 'text-gray-500 hover:text-pink-400'}`}><Star size={16} fill={watchlist.includes(p.id) ? "currentColor" : "none"}/></button><button onClick={() => { setEditingNotePlayerId(p.id); setTempNoteValue(privateNotes[p.id] || ""); }} className={`p-2 rounded-lg transition-all ${privateNotes[p.id] ? 'text-yellow-500' : 'text-gray-500 hover:text-white'}`}><FileText size={16}/></button></div></div>{editingNotePlayerId === p.id && (<div className="bg-black/40 p-3 rounded-xl border border-white/10"><textarea autoFocus value={tempNoteValue} onChange={e => setTempNoteValue(e.target.value)} className="w-full bg-transparent text-xs text-white focus:outline-none min-h-[50px]" placeholder="Add your private notes..." /><div className="flex justify-end gap-3 mt-2"><button onClick={() => setEditingNotePlayerId(null)} className="text-[9px] font-bold text-gray-500 uppercase">Cancel</button><button onClick={() => savePrivateNote(p.id)} className="bg-yellow-600 text-white px-3 py-1 rounded-lg text-[9px] font-bold">Save Note</button></div></div>)}</div>))}</div></div>)}</div></GlassCard></div>
             </div>
           </div>
         )}
 
         {view === 'GAME' && room && (
-            // ... (Rest of GAME View same as previous file)
             <div className="flex-1 flex h-full overflow-hidden animate-fade-in">
                 {/* Widened Sidebar */}
                 <div className="w-[440px] bg-black/40 border-r border-white/10 flex flex-col backdrop-blur-3xl z-30 shrink-0 h-full">
                     <div className="p-6 border-b border-white/10 flex justify-between items-center">
                         <div>
                             <h2 className="text-2xl font-display font-bold text-yellow-500 tracking-wider">AUCTION HUB</h2>
-                            <div className="flex items-center gap-2 mt-2">
+                            <div className="flex items-center gap-3 mt-2">
                                 <span className={`w-2 h-2 rounded-full ${room.gameState.isPaused ? 'bg-red-500' : 'bg-green-500 animate-pulse'}`}></span>
                                 <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{room.gameState.isPaused ? 'Paused' : 'Active Session'}</span>
+                                <span className="text-[10px] font-bold text-gray-600 uppercase tracking-widest">
+                                  {connectedMembers}/{room.members.length} connected
+                                </span>
+                                <span className={`px-2 py-1 rounded-full text-[9px] font-bold uppercase tracking-[0.2em] ${
+                                  connectionStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' :
+                                  connectionStatus === 'reconnecting' ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20' :
+                                  'bg-white/5 text-slate-400 border border-white/10'
+                                }`}>
+                                  {connectionStatus}
+                                </span>
                             </div>
+                            {room.gameState.lastHostAction && (
+                                <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-gray-600">
+                                    Undo available: {room.gameState.lastHostAction}
+                                </p>
+                            )}
                         </div>
                         {isHost && (
-                            <div className="flex gap-2">
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={handleUndoLastAction}
+                                    disabled={!room.gameState.lastHostAction}
+                                    className="p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all disabled:opacity-30"
+                                    title={room.gameState.lastHostAction || 'No host action to undo'}
+                                >
+                                    <RefreshCcw size={18} />
+                                </button>
                                 <button onClick={togglePause} className="p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all">
                                     {room.gameState.isPaused ? <Play size={18} /> : <Pause size={18} />}
+                                </button>
+                                <button
+                                    onClick={handleNextPlayer}
+                                    className="p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all"
+                                    title="Advance to next player"
+                                >
+                                    <SkipForward size={18} />
                                 </button>
                                 <button onClick={(e) => { e.stopPropagation(); setShowEndConfirm(true); }} className="p-3 bg-red-600/10 hover:bg-red-600/20 text-red-500 rounded-xl transition-all">
                                     <StopCircle size={18} />
@@ -767,35 +849,55 @@ export default function App() {
                                     <GlassCard className="flex-1 flex flex-col overflow-hidden relative border-white/20 shadow-2xl max-h-[440px]">
                                         <div className="w-full h-full bg-gray-900 flex items-center justify-center relative">
                                             <User size={80} className="text-white/10 absolute z-0"/>
-                                            {room.players.find(p => p.id === room.gameState.currentPlayerId)?.imageUrl && (
+                                            {currentPlayer?.imageUrl && (
                                                 <img 
-                                                    src={room.players.find(p => p.id === room.gameState.currentPlayerId)?.imageUrl} 
+                                                    src={currentPlayer.imageUrl} 
                                                     className="w-full h-full object-contain bg-gradient-to-b from-gray-800 to-black relative z-10" 
                                                     onError={(e) => e.currentTarget.style.display = 'none'} 
                                                 />
                                             )}
                                         </div>
                                         <div className="absolute bottom-0 w-full p-5 bg-gradient-to-t from-black to-transparent pt-12 z-20">
-                                            <h2 className="text-2xl font-display font-bold text-white mb-0.5 drop-shadow-xl">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.name}</h2>
+                                            <h2 className="text-2xl font-display font-bold text-white mb-0.5 drop-shadow-xl">{currentPlayer?.name}</h2>
                                             <div className="flex items-center gap-2">
-                                                <p className="text-xs text-blue-400 font-bold tracking-widest uppercase">{room.players.find(p => p.id === room.gameState.currentPlayerId)?.position}</p>
-                                                <span className="text-[9px] bg-yellow-500/20 text-yellow-500 px-2 rounded font-bold uppercase">POT {room.players.find(p => p.id === room.gameState.currentPlayerId)?.pot}</span>
+                                                <p className="text-xs text-cyan-300 font-bold tracking-widest uppercase">{currentPlayer?.position}</p>
+                                                <span className="text-[9px] bg-yellow-500/20 text-yellow-500 px-2 rounded font-bold uppercase">POT {currentPlayer?.pot}</span>
                                             </div>
+                                            {currentPlayerKeyStats.length > 0 && (
+                                                <div className="grid grid-cols-2 gap-2 mt-4">
+                                                    {currentPlayerKeyStats.map((stat) => (
+                                                        <div key={stat.label} className="rounded-2xl border border-white/10 bg-black/45 px-3 py-2 backdrop-blur-md">
+                                                            <div className="text-[8px] font-bold uppercase tracking-[0.25em] text-gray-500">{stat.label}</div>
+                                                            <div className="text-sm font-bold text-white">{stat.value}</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {currentPlayer?.iplTeam && (
+                                                <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-gray-300">
+                                                    <Shield size={12} className="text-amber-400" />
+                                                    {currentPlayer.iplTeam}
+                                                </div>
+                                            )}
                                         </div>
                                     </GlassCard>
                                 </div>
                                 
                                 <div className="lg:col-span-7 flex flex-col gap-6 overflow-hidden justify-center">
                                     <GlassCard className="flex-1 flex flex-col items-center justify-center p-6 relative shadow-2xl overflow-hidden max-h-[380px]">
+                                        <div className="absolute top-5 right-5 px-4 py-2 rounded-full border border-white/10 bg-black/40 backdrop-blur-md">
+                                            <span className="text-[10px] text-gray-500 uppercase tracking-[0.25em]">Timer</span>
+                                            <div className="text-xl font-display text-white leading-none mt-1">{room.gameState.timer}s</div>
+                                        </div>
                                         <div className="w-full max-w-sm bg-black/40 rounded-3xl p-5 border border-white/10 shadow-inner">
                                             <p className="text-[8px] text-gray-500 font-bold uppercase tracking-[0.3em] mb-3 text-center">Top Contender</p>
                                             {room.gameState.currentBid ? (
                                                 <div className="text-center animate-fade-in">
                                                     <div className="text-4xl font-display font-bold text-white mb-1">{room.gameState.currentBid.amount} <span className="text-lg text-gray-500">L</span></div>
-                                                    <div className="inline-block px-4 py-1.5 rounded-full font-bold text-white text-[9px] tracking-widest shadow-lg uppercase" style={{ backgroundColor: room.teams.find(t => t.id === room.gameState.currentBid?.teamId)?.color }}>{room.teams.find(t => t.id === room.gameState.currentBid?.teamId)?.name}</div>
+                                                    <div className="inline-block px-4 py-1.5 rounded-full font-bold text-white text-[9px] tracking-widest shadow-lg uppercase" style={{ backgroundColor: currentBidTeam?.color }}>{currentBidTeam?.name}</div>
                                                 </div>
                                             ) : (
-                                                <div className="text-center py-4 border border-dashed border-white/10 rounded-2xl italic text-gray-600 text-xs">Waiting for opening bid... (Base: {room.players.find(p => p.id === room.gameState.currentPlayerId)?.basePrice || 0}L)</div>
+                                                <div className="text-center py-4 border border-dashed border-white/10 rounded-2xl italic text-gray-600 text-xs">Waiting for opening bid... (Base: {currentPlayer?.basePrice || 0}L)</div>
                                             )}
                                         </div>
 
@@ -821,7 +923,7 @@ export default function App() {
                                         </GlassCard>
                                     ) : (
                                         <button onClick={handleGetInsights} disabled={isInsightsLoading} className="bg-white/5 hover:bg-white/10 py-2.5 rounded-xl text-[9px] font-bold uppercase tracking-widest text-gray-500 border border-white/5 transition-all shadow-inner shrink-0">
-                                            {isInsightsLoading ? <Loader2 size={12} className="animate-spin mx-auto"/> : 'Query Scout Intel'}
+                                            {isInsightsLoading ? <Loader2 size={12} className="animate-spin mx-auto"/> : 'Scout With Gemini'}
                                         </button>
                                     )}
                                 </div>
@@ -836,20 +938,32 @@ export default function App() {
                             const isWinning = room.gameState.currentBid?.teamId === t.id;
                             const isMyTeam = t.controlledByUserId === profile?.id;
                             const currentAmt = room.gameState.currentBid?.amount || 0;
-                            const player = room.players.find(p => p.id === room.gameState.currentPlayerId);
-                            const baseAmt = player?.basePrice || 0;
-                            
-                            const nextBid10 = Math.max(baseAmt, currentAmt + 10);
-                            const nextBid20 = Math.max(baseAmt + 10, currentAmt + 20);
-                            
+                            const baseAmt = currentPlayer?.basePrice || 0;
+                            const bidStep = room.config.minBidIncrement;
+                            const nextBid10 = Math.max(baseAmt, currentAmt + bidStep);
+                            const nextBid20 = Math.max(baseAmt + bidStep, currentAmt + bidStep * 2);
                             const isSquadFull = t.roster.length >= room.config.maxPlayers;
-                            const slotsLeft = room.config.maxPlayers - t.roster.length;
-                            const isLowBudget = slotsLeft > 0 && (t.budget < slotsLeft * 25);
+                            const baseConstraintState = buildTeamConstraintState(room.config, t.roster, pendingAuctionPlayers);
+                            const availablePlayersAfterWin = currentPlayer
+                              ? pendingAuctionPlayers.filter((player) => player.id !== currentPlayer.id)
+                              : pendingAuctionPlayers;
+                            const nextBidTenState = currentPlayer
+                              ? evaluateBidCapacity(room.config, t, currentPlayer, nextBid10, availablePlayersAfterWin)
+                              : null;
+                            const nextBidTwentyState = currentPlayer
+                              ? evaluateBidCapacity(room.config, t, currentPlayer, nextBid20, availablePlayersAfterWin)
+                              : null;
+                            const missingRoleSummary = roleTargets
+                              .filter(([role]) => baseConstraintState.missingRoles[role] > 0)
+                              .map(([role]) => `${baseConstraintState.missingRoles[role]} ${getRoleShortLabel(role)}`)
+                              .join(' · ');
+                            const isLowBudget =
+                              !baseConstraintState.isPossible || t.budget < baseConstraintState.minimumRequiredBudget;
 
                             return (
                                 <div key={t.id} onClick={() => setViewTeamRoster(t)} className={`shrink-0 w-72 p-4 rounded-2xl border transition-all duration-300 cursor-pointer ${isWinning ? 'bg-green-500/10 border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.1)]' : 'bg-white/5 border-white/10 hover:border-white/20'} ${isMyTeam ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-black' : ''} relative`}>
                                     {isMyTeam && isLowBudget && (
-                                        <div className="absolute top-2 right-2 text-yellow-500 bg-yellow-500/10 p-1.5 rounded-lg border border-yellow-500/30 animate-pulse" title="Low Budget Warning: You might run out of funds to fill your squad!">
+                                        <div className="absolute top-2 right-2 text-yellow-500 bg-yellow-500/10 p-1.5 rounded-lg border border-yellow-500/30 animate-pulse" title={baseConstraintState.reason || 'Your purse is getting too tight to finish the squad cleanly.'}>
                                             <AlertTriangle size={14} />
                                         </div>
                                     )}
@@ -865,13 +979,45 @@ export default function App() {
                                             </div>
                                         </div>
                                     </div>
+                                    <div className="mb-3 rounded-xl border border-white/5 bg-black/30 px-3 py-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <span className="text-[8px] font-bold uppercase tracking-[0.22em] text-gray-500">Reserve to Finish</span>
+                                            <span className={`text-[10px] font-mono font-bold ${isLowBudget ? 'text-red-400' : 'text-cyan-300'}`}>
+                                                {baseConstraintState.minimumRequiredBudget}L
+                                            </span>
+                                        </div>
+                                        <div className="mt-1 text-[9px] text-gray-500">
+                                            {missingRoleSummary || 'Role minimums on track'}
+                                        </div>
+                                    </div>
                                     {isMyTeam && room.gameState.currentPlayerId && !room.gameState.isPaused && !isWinning ? (
                                         isSquadFull ? (
                                             <div className="w-full bg-red-500/10 py-2.5 rounded-xl text-[10px] font-bold text-red-500 text-center uppercase tracking-widest border border-red-500/20">Squad Limit Reached</div>
                                         ) : (
-                                            <div className="grid grid-cols-2 gap-2 animate-fade-in" onClick={e => e.stopPropagation()}>
-                                              <button onClick={() => placeBid(t.id, nextBid10)} disabled={t.budget < nextBid10} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-50 active:scale-95 transition-all">+{nextBid10 - currentAmt}L (Bid {nextBid10}L)</button>
-                                              <button onClick={() => placeBid(t.id, nextBid20)} disabled={t.budget < nextBid20} className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-50 active:scale-95 transition-all">+{nextBid20 - currentAmt}L (Bid {nextBid20}L)</button>
+                                            <div className="space-y-2 animate-fade-in" onClick={e => e.stopPropagation()}>
+                                              <div className="grid grid-cols-2 gap-2">
+                                                <button
+                                                  onClick={() => placeBid(t.id, nextBid10)}
+                                                  disabled={!nextBidTenState?.canBid}
+                                                  title={nextBidTenState?.reason || ''}
+                                                  className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-40 active:scale-95 transition-all"
+                                                >
+                                                  +{nextBid10 - currentAmt}L (Bid {nextBid10}L)
+                                                </button>
+                                                <button
+                                                  onClick={() => placeBid(t.id, nextBid20)}
+                                                  disabled={!nextBidTwentyState?.canBid}
+                                                  title={nextBidTwentyState?.reason || ''}
+                                                  className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-[9px] font-bold text-white shadow-xl disabled:opacity-40 active:scale-95 transition-all"
+                                                >
+                                                  +{nextBid20 - currentAmt}L (Bid {nextBid20}L)
+                                                </button>
+                                              </div>
+                                              {(!nextBidTenState?.canBid || !nextBidTwentyState?.canBid) && (
+                                                <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[9px] font-medium text-red-200">
+                                                  {nextBidTenState?.reason || nextBidTwentyState?.reason}
+                                                </div>
+                                              )}
                                             </div>
                                         )
                                     ) : isWinning ? (
@@ -895,9 +1041,17 @@ export default function App() {
                     <p className="text-gray-400 text-sm font-medium uppercase tracking-widest max-w-lg leading-relaxed">
                         All squads have been finalized. The data has been archived to your dashboard history.
                     </p>
-                    <button onClick={() => setView('HOME')} className="mt-8 bg-blue-600 hover:bg-blue-500 px-8 py-3 rounded-xl font-bold text-white transition-all shadow-lg flex items-center gap-2">
-                        <ArrowRight size={18}/> Return to Dashboard
-                    </button>
+                    <div className="mt-8 flex flex-wrap justify-center gap-3">
+                        <button onClick={() => handleExportSummary(room!, 'csv')} className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-xs font-bold uppercase tracking-widest text-white transition-all hover:bg-white/10">
+                            Export CSV
+                        </button>
+                        <button onClick={() => handleExportSummary(room!, 'json')} className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-xs font-bold uppercase tracking-widest text-white transition-all hover:bg-white/10">
+                            Export JSON
+                        </button>
+                        <button onClick={() => setView('HOME')} className="bg-blue-600 hover:bg-blue-500 px-8 py-3 rounded-xl font-bold text-white transition-all shadow-lg flex items-center gap-2">
+                            <ArrowRight size={18}/> Return to Dashboard
+                        </button>
+                    </div>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 w-full pb-10">
@@ -932,7 +1086,7 @@ export default function App() {
                 <GlassCard className="max-w-2xl w-full p-8 flex flex-col bg-[#0a0a0a] border-white/10 shadow-2xl animate-fade-in max-h-[90vh] overflow-y-auto">
                     <div className="flex items-center gap-4 mb-8">
                         <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center border border-green-500/20"><Play size={24} className="text-green-500" fill="currentColor"/></div>
-                        <div><h2 className="text-2xl font-bold text-white">Initialize Auction</h2><p className="text-gray-400 text-xs">Verify settings before launching the live session.</p></div>
+                        <div><h2 className="text-2xl font-bold text-white">Initialize Auction</h2><p className="text-gray-400 text-xs">Verify live settings, roster targets, and the imported pool before opening the room.</p></div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -941,11 +1095,15 @@ export default function App() {
                              <div className="space-y-3">
                                  <div>
                                      <label className="text-[10px] text-gray-400 block mb-1">Squad Budget (L)</label>
-                                     <input type="number" className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-sm text-white focus:border-green-500/50 focus:outline-none transition-colors" value={room?.config.totalBudget} onChange={(e) => roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} />
+                                     <input type="number" className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-sm text-white focus:border-green-500/50 focus:outline-none transition-colors" value={room?.config.totalBudget} onChange={(e) => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} />
                                  </div>
                                  <div>
                                      <label className="text-[10px] text-gray-400 block mb-1">Min Bid Step (L)</label>
-                                     <input type="number" className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-sm text-white focus:border-green-500/50 focus:outline-none transition-colors" value={room?.config.minBidIncrement} onChange={(e) => roomService.dispatch({type:'UPDATE_CONFIG', payload: {minBidIncrement: parseInt(e.target.value)}})} />
+                                     <input type="number" className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-sm text-white focus:border-green-500/50 focus:outline-none transition-colors" value={room?.config.minBidIncrement} onChange={(e) => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {minBidIncrement: parseInt(e.target.value)}})} />
+                                 </div>
+                                 <div>
+                                     <label className="text-[10px] text-gray-400 block mb-1">Bid Window (sec)</label>
+                                     <input type="number" className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-sm text-white focus:border-green-500/50 focus:outline-none transition-colors" value={room?.config.bidTimerSeconds} onChange={(e) => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {bidTimerSeconds: parseInt(e.target.value)}})} />
                                  </div>
                              </div>
                          </div>
@@ -966,9 +1124,25 @@ export default function App() {
                               </div>
                                <div className="flex justify-between items-center border-t border-white/5 pt-2 mt-2">
                                   <span className="text-sm text-gray-300">Max Squad Size</span>
-                                  <input type="number" className="w-16 bg-black/50 border border-white/10 rounded-lg p-1 text-sm text-white text-right focus:outline-none" value={room?.config.maxPlayers} onChange={(e) => roomService.dispatch({type:'UPDATE_CONFIG', payload: {maxPlayers: parseInt(e.target.value)}})} />
+                                  <input type="number" className="w-16 bg-black/50 border border-white/10 rounded-lg p-1 text-sm text-white text-right focus:outline-none" value={room?.config.maxPlayers} onChange={(e) => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {maxPlayers: parseInt(e.target.value)}})} />
                               </div>
                          </div>
+                    </div>
+
+                    <div className="mb-8 rounded-2xl border border-white/5 bg-white/5 p-4">
+                        <div className="mb-3 flex items-center gap-2">
+                            <BarChart3 size={14} className="text-cyan-300" />
+                            <h4 className="text-xs font-bold uppercase tracking-widest text-gray-500">Roster Targets</h4>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {roleTargets.map(([role, minimum]) => (
+                                <div key={role} className="rounded-xl border border-white/5 bg-black/30 p-3">
+                                    <div className="text-[9px] font-bold uppercase tracking-[0.22em] text-gray-500">{role === 'Wicket Keeper' ? 'WK' : role === 'All Rounder' ? 'AR' : role}</div>
+                                    <div className="mt-1 text-xl font-display font-bold text-white">{minimum}</div>
+                                    <div className="text-[10px] text-gray-500">minimum required</div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
                     <div className="mb-8">
@@ -1047,7 +1221,7 @@ export default function App() {
              </div>
         )}
 
-        {viewTeamRoster && (
+        {viewTeamRoster && viewTeamRoleCounts && (
             <div className="fixed inset-0 z-[120] bg-black/90 backdrop-blur-md flex items-center justify-center p-6" onClick={() => setViewTeamRoster(null)}>
                 <GlassCard className="max-w-xl w-full flex flex-col bg-[#0a0a0a] border-white/10 shadow-2xl max-h-[80vh]" onClick={e => e.stopPropagation()}>
                     <div className="p-6 border-b border-white/10 flex items-center gap-4 shrink-0" style={{borderColor: viewTeamRoster.color}}>
@@ -1070,6 +1244,19 @@ export default function App() {
                              <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1">Squad Strength</span>
                              <span className="text-xl font-mono font-bold text-blue-400">{viewTeamRoster.roster.length} / {room?.config.maxPlayers}</span>
                          </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-6 py-4 border-b border-white/5 shrink-0">
+                        {roleTargets.map(([role, minimum]) => {
+                            const actual = viewTeamRoleCounts[role];
+                            const met = actual >= minimum;
+                            return (
+                                <div key={role} className={`rounded-xl border px-3 py-2 ${met ? 'border-emerald-500/20 bg-emerald-500/10' : 'border-white/5 bg-white/5'}`}>
+                                    <div className="text-[9px] font-bold uppercase tracking-[0.22em] text-gray-500">{role === 'Wicket Keeper' ? 'WK' : role === 'All Rounder' ? 'AR' : role}</div>
+                                    <div className="mt-1 text-lg font-bold text-white">{actual}<span className="text-xs text-gray-500"> / {minimum}</span></div>
+                                </div>
+                            );
+                        })}
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
@@ -1117,32 +1304,139 @@ export default function App() {
         )}
 
         {showSettings && (
-         <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4 backdrop-blur-md"><GlassCard className="w-full max-w-4xl border-white/10 flex flex-col max-h-[90vh] bg-[#0a0a0a] overflow-hidden"><div className="p-8 border-b border-white/10 flex justify-between items-center shrink-0"><h2 className="text-2xl font-bold">Room Management</h2><button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white transition-colors"><XCircle size={28}/></button></div><div className="flex border-b border-white/10 px-8 bg-white/5 shrink-0">
-           <button onClick={() => setActiveSettingsTab('config')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='config'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Financials</button>
-           <button onClick={() => setActiveSettingsTab('schedule')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='schedule'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Scheduling</button>
-           <button onClick={() => setActiveSettingsTab('import')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='import'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Import CSV</button>
-         </div><div className="p-8 overflow-y-auto flex-1 custom-scrollbar">
-           {activeSettingsTab === 'config' && (<div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-               <div className="bg-white/5 p-6 rounded-2xl border border-white/5"><label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Total Squad Budget (L)</label><input type="number" value={room?.config.totalBudget} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
-               <div className="bg-white/5 p-6 rounded-2xl border border-white/5"><label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Base Bid Step (L)</label><input type="number" value={room?.config.minBidIncrement} onChange={e => roomService.dispatch({type:'UPDATE_CONFIG', payload: {minBidIncrement: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
-           </div>)}
-           {activeSettingsTab === 'schedule' && (
-             <div className="bg-white/5 p-8 rounded-2xl border border-white/5">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-3 text-white"><Calendar size={20} className="text-yellow-500"/> Countdown Start</h3>
-                <div className="space-y-4">
-                    <p className="text-xs text-gray-500">Scheduled sessions will synchronize the start timer for all connected users.</p>
-                    <input type="datetime-local" className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-white focus:outline-none" onChange={(e) => { const time = new Date(e.target.value).getTime(); if (time > Date.now()) roomService.dispatch({ type: 'UPDATE_CONFIG', payload: { scheduledStartTime: time } }); }} value={room?.config.scheduledStartTime ? new Date(room.config.scheduledStartTime - (new Date().getTimezoneOffset() * 60000)).toISOString().slice(0, 16) : ""} />
-                    {room?.config.scheduledStartTime && <button onClick={() => roomService.dispatch({ type: 'UPDATE_CONFIG', payload: { scheduledStartTime: undefined } })} className="text-red-400 text-xs font-bold uppercase tracking-widest hover:underline">Clear Schedule</button>}
+          <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4 backdrop-blur-md">
+            <GlassCard className="w-full max-w-4xl border-white/10 flex flex-col max-h-[90vh] bg-[#0a0a0a] overflow-hidden">
+              <div className="p-8 border-b border-white/10 flex justify-between items-center shrink-0">
+                <div>
+                  <h2 className="text-2xl font-bold">Room Management</h2>
+                  <p className="mt-1 text-xs uppercase tracking-[0.2em] text-gray-500">Host controls for the live sync room</p>
                 </div>
-            </div>
-           )}
-           {activeSettingsTab === 'import' && (<div className="space-y-6">
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-               <div><label className="text-xs text-gray-500 font-bold uppercase mb-2 block">Google Sheets URL</label><input type="text" placeholder="https://..." value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
-               <div><label className="text-xs text-gray-500 font-bold uppercase mb-2 block">Tab Name</label><input type="text" placeholder="Players" value={sheetName} onChange={e => setSheetName(e.target.value)} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
-             </div>
-             <button onClick={handleFetchFromSheet} className="bg-blue-600 hover:bg-blue-500 px-8 py-4 rounded-xl text-sm font-bold flex items-center gap-2 transition-all">{isFetchingSheet ? <Loader2 size={16} className="animate-spin"/> : <Download size={16}/>} Fetch & Preview Data</button>
-             {fetchedPreview.length > 0 && (<div className="mt-6 bg-white/5 border border-white/10 rounded-2xl overflow-hidden animate-fade-in"><div className="p-4 bg-white/5 border-b border-white/10 flex justify-between items-center"><h3 className="font-bold text-white flex items-center gap-2"><CheckCircle size={18} className="text-green-500"/> Preview Data ({fetchedPreview.length})</h3><button onClick={() => setFetchedPreview([])} className="text-xs text-red-400 hover:text-red-300">Clear</button></div><div className="max-h-[300px] overflow-y-auto"><table className="w-full text-left text-xs text-gray-400"><thead className="bg-white/5 text-gray-200 sticky top-0"><tr><th className="p-3">Name</th><th className="p-3">Role</th><th className="p-3">Pot</th><th className="p-3">Base Price (L)</th></tr></thead><tbody>{fetchedPreview.map((p, i) => (<tr key={i} className="border-b border-white/5 hover:bg-white/5"><td className="p-3 font-medium text-white">{p.name}</td><td className="p-3">{p.position}</td><td className="p-3"><span className="bg-yellow-500/10 text-yellow-500 px-1.5 py-0.5 rounded text-[10px] font-bold">{p.pot}</span></td><td className="p-3 font-mono text-blue-400">{p.basePrice}</td></tr>))}</tbody></table></div><div className="p-4 border-t border-white/10"><button onClick={() => { roomService.dispatch({ type: 'IMPORT_PLAYERS', payload: fetchedPreview }); setFetchedPreview([]); setShowSettings(false); }} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2"><Download size={18}/> Confirm & Import</button></div></div>)}</div>)}</div></GlassCard></div>
+                <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white transition-colors">
+                  <XCircle size={28} />
+                </button>
+              </div>
+
+              <div className="flex border-b border-white/10 px-8 bg-white/5 shrink-0">
+                <button onClick={() => setActiveSettingsTab('config')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='config'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Financials</button>
+                <button onClick={() => setActiveSettingsTab('schedule')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='schedule'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Scheduling</button>
+                <button onClick={() => setActiveSettingsTab('import')} className={`px-6 py-4 text-sm font-bold border-b-2 transition-colors ${activeSettingsTab==='import'?'border-blue-500 text-blue-400':'border-transparent text-gray-400'}`}>Player Pool</button>
+              </div>
+
+              <div className="p-8 overflow-y-auto flex-1 custom-scrollbar">
+                {activeSettingsTab === 'config' && (
+                  <div className="space-y-8">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+                        <label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Total Squad Budget (L)</label>
+                        <input type="number" value={room?.config.totalBudget} onChange={e => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {totalBudget: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/>
+                      </div>
+                      <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+                        <label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Base Bid Step (L)</label>
+                        <input type="number" value={room?.config.minBidIncrement} onChange={e => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {minBidIncrement: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/>
+                      </div>
+                      <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+                        <label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Bid Window (sec)</label>
+                        <input type="number" value={room?.config.bidTimerSeconds} onChange={e => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {bidTimerSeconds: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/>
+                      </div>
+                      <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+                        <label className="text-xs text-gray-500 font-bold uppercase mb-3 block">Maximum Squad Size</label>
+                        <input type="number" value={room?.config.maxPlayers} onChange={e => void roomService.dispatch({type:'UPDATE_CONFIG', payload: {maxPlayers: parseInt(e.target.value)}})} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/>
+                      </div>
+                    </div>
+
+                    <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+                      <div className="mb-4 flex items-center gap-2">
+                        <BarChart3 size={16} className="text-cyan-300" />
+                        <h3 className="text-sm font-bold uppercase tracking-[0.24em] text-gray-400">Role Minimums</h3>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {roleTargets.map(([role, minimum]) => (
+                          <div key={role}>
+                            <label className="text-xs text-gray-500 font-bold uppercase mb-3 block">{role}</label>
+                            <input
+                              type="number"
+                              value={minimum}
+                              onChange={(e) => void roomService.dispatch({
+                                type: 'UPDATE_CONFIG',
+                                payload: {
+                                  roleMinimums: {
+                                    ...room?.config.roleMinimums,
+                                    [role]: parseInt(e.target.value),
+                                  },
+                                },
+                              })}
+                              className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeSettingsTab === 'schedule' && (
+                  <div className="bg-white/5 p-8 rounded-2xl border border-white/5">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-3 text-white"><Calendar size={20} className="text-yellow-500"/> Countdown Start</h3>
+                    <div className="space-y-4">
+                      <p className="text-xs text-gray-500">Schedule a synchronized room launch so every connected owner flips into the live auction at the same time.</p>
+                      <input type="datetime-local" className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-white focus:outline-none" onChange={(e) => { const time = new Date(e.target.value).getTime(); if (time > Date.now()) void roomService.dispatch({ type: 'UPDATE_CONFIG', payload: { scheduledStartTime: time } }); }} value={room?.config.scheduledStartTime ? new Date(room.config.scheduledStartTime - (new Date().getTimezoneOffset() * 60000)).toISOString().slice(0, 16) : ""} />
+                      {room?.config.scheduledStartTime && <button onClick={() => void roomService.dispatch({ type: 'UPDATE_CONFIG', payload: { scheduledStartTime: undefined } })} className="text-red-400 text-xs font-bold uppercase tracking-widest hover:underline">Clear Schedule</button>}
+                    </div>
+                  </div>
+                )}
+
+                {activeSettingsTab === 'import' && (
+                  <div className="space-y-6">
+                    <div className="rounded-2xl border border-white/5 bg-white/5 p-5">
+                      <h3 className="text-sm font-bold uppercase tracking-[0.24em] text-gray-400">Google Sheets Import</h3>
+                      <p className="mt-2 text-xs text-gray-500">Use a public sheet tab as the canonical player pool for the room. The imported order is randomized within each pot.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div><label className="text-xs text-gray-500 font-bold uppercase mb-2 block">Google Sheets URL</label><input type="text" placeholder="https://..." value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
+                      <div><label className="text-xs text-gray-500 font-bold uppercase mb-2 block">Tab Name</label><input type="text" placeholder="Players" value={sheetName} onChange={e => setSheetName(e.target.value)} className="w-full bg-black/40 p-4 rounded-xl border border-white/10 text-white focus:outline-none"/></div>
+                    </div>
+
+                    <button onClick={handleFetchFromSheet} className="bg-blue-600 hover:bg-blue-500 px-8 py-4 rounded-xl text-sm font-bold flex items-center gap-2 transition-all">{isFetchingSheet ? <Loader2 size={16} className="animate-spin"/> : <Download size={16}/>} Fetch Sheet Preview</button>
+
+                    {fetchedPreview.length > 0 && (
+                      <div className="mt-6 bg-white/5 border border-white/10 rounded-2xl overflow-hidden animate-fade-in">
+                        <div className="p-4 bg-white/5 border-b border-white/10 flex justify-between items-center">
+                          <h3 className="font-bold text-white flex items-center gap-2"><CheckCircle size={18} className="text-green-500"/> Preview Data ({fetchedPreview.length})</h3>
+                          <button onClick={() => setFetchedPreview([])} className="text-xs text-red-400 hover:text-red-300">Clear</button>
+                        </div>
+                        <div className="max-h-[300px] overflow-y-auto">
+                          <table className="w-full text-left text-xs text-gray-400">
+                            <thead className="bg-white/5 text-gray-200 sticky top-0">
+                              <tr>
+                                <th className="p-3">Name</th>
+                                <th className="p-3">Role</th>
+                                <th className="p-3">Pot</th>
+                                <th className="p-3">Base Price (L)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {fetchedPreview.map((p, i) => (
+                                <tr key={i} className="border-b border-white/5 hover:bg-white/5">
+                                  <td className="p-3 font-medium text-white">{p.name}</td>
+                                  <td className="p-3">{p.position}</td>
+                                  <td className="p-3"><span className="bg-yellow-500/10 text-yellow-500 px-1.5 py-0.5 rounded text-[10px] font-bold">{p.pot}</span></td>
+                                  <td className="p-3 font-mono text-blue-400">{p.basePrice}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="p-4 border-t border-white/10">
+                          <button onClick={() => { void roomService.dispatch({ type: 'IMPORT_PLAYERS', payload: fetchedPreview }).then(() => { setFetchedPreview([]); setShowSettings(false); }); }} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2"><Download size={18}/> Confirm & Import</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </GlassCard>
+          </div>
         )}
       </BackgroundWrapper>
     );

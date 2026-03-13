@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: ipl-auction-command-centre
+    runtime: node
+    region: singapore
+    plan: starter
+    numInstances: 1
+    autoDeploy: false
+    healthCheckPath: /api/health
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false

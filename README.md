@@ -210,3 +210,5 @@ The current implementation has been exercised with:
 ## Next Backend/Hosting Step
 
 For production hardening, the next logical step is moving active room state to a durable backend layer so reconnects, failover, and multi-instance hosting are fully resilient.
+
+Deployment notes for Render and Cloud Run live in [docs/deployment.md](/Users/nair/Coding%20Projects/ipl_league/docs/deployment.md).

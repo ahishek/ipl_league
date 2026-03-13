@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite --host 127.0.0.1 --port 4173",
